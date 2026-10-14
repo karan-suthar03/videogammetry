@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>
 
+#include "videogammetry/features.h"
 #include "videogammetry/frame.h"
 #include "videogammetry/image.h"
 #include "videogammetry/map.h"
@@ -58,7 +59,11 @@ public:
     Reconstructor() : Reconstructor(Options{}) {}
     explicit Reconstructor(const Options& options);
 
+    // Processes the next frame: extracts features here, then tracks/maps.
     void addFrame(const FrameView& frame);
+    // Same with features computed elsewhere (e.g. FeaturePipeline, which
+    // extracts many frames in parallel). Frames must arrive in order.
+    void addFeatures(FrameFeatures&& features);
 
     State state() const { return state_; }
     const Stats& stats() const { return stats_; }
@@ -97,9 +102,9 @@ private:
         std::vector<std::array<std::uint8_t, 3>> colors;
     };
 
-    void tryInitialize(const FrameView& frame);
-    bool track(const FrameView& frame);
-    void addKeyframe(const FrameView& frame);
+    void tryInitialize();
+    bool track();
+    void addKeyframe();
     int searchByProjection(const Pose& pose, float radius, const std::vector<int>& localPoints,
                            std::vector<int>& pointOfKeypoint) const;
     int solveAndRefine(const Pose& prior, const std::vector<int>& localPoints, std::vector<int>& pointOfKeypoint,
@@ -108,16 +113,14 @@ private:
     int triangulateBetween(Keyframe& older, Keyframe& newer);
     double medianSceneDepth(const Keyframe& kf) const;
     void startNewMap();
-    void sampleColors(const FrameView& frame, FrameData& data) const;
 
     Options options_;
-    std::unique_ptr<ThreadPool> pool_;  // null when single-threaded; declared before orb_
-    OrbExtractor orb_;
+    std::unique_ptr<ThreadPool> pool_;  // null when single-threaded; declared before extractor_
+    FeatureExtractor extractor_;        // used by addFrame()
     Profiler profiler_;
     CameraIntrinsics intrinsics_;
     float processScale_ = 1.0f;
     int imageWidth_ = 0, imageHeight_ = 0;  // processed image size
-    Image gray_, processed_;
 
     State state_ = State::Initializing;
     Stats stats_;
@@ -126,6 +129,7 @@ private:
     // Current frame.
     std::vector<Keypoint> keypoints_;
     std::vector<Descriptor> descriptors_;
+    std::vector<std::array<std::uint8_t, 3>> colors_;
     std::vector<int> trackedPoints_;
     int trackedCount_ = 0;
     Pose pose_;

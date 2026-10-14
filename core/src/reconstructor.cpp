@@ -31,47 +31,30 @@ double medianOf(std::vector<double> v) {
 }  // namespace
 
 Reconstructor::Reconstructor(const Options& options)
-    : options_(options), pool_(makePool(options.threads)), orb_(options.orb, pool_.get()) {}
-
-void Reconstructor::sampleColors(const FrameView& frame, FrameData& data) const {
-    data.colors.resize(data.keypoints.size());
-    const int bpp = frame.format == FrameView::Format::Gray8 ? 1 : (frame.format == FrameView::Format::RGB8 ? 3 : 4);
-    for (std::size_t i = 0; i < data.keypoints.size(); ++i) {
-        const Keypoint& k = data.keypoints[i];
-        const int x = std::clamp(static_cast<int>(std::lround((k.x + 0.5f) * processScale_ - 0.5f)), 0, frame.width - 1);
-        const int y = std::clamp(static_cast<int>(std::lround((k.y + 0.5f) * processScale_ - 0.5f)), 0, frame.height - 1);
-        const std::uint8_t* p = frame.data + static_cast<std::size_t>(y) * frame.stride + static_cast<std::size_t>(x) * bpp;
-        data.colors[i] = bpp == 1 ? std::array<std::uint8_t, 3>{p[0], p[0], p[0]}
-                                  : std::array<std::uint8_t, 3>{p[0], p[1], p[2]};
-    }
-}
+    : options_(options),
+      pool_(makePool(options.threads)),
+      extractor_(options.processWidth, options.orb, pool_.get()) {}
 
 void Reconstructor::addFrame(const FrameView& frame) {
     if (frame.data == nullptr || frame.width <= 0 || frame.height <= 0) return;
+    FrameFeatures features;
+    {
+        auto t = profiler_.scope("extract");
+        extractor_.extract(frame, static_cast<long>(frameCount_), features);
+    }
+    addFeatures(std::move(features));
+}
 
-    {
-        auto t = profiler_.scope("gray");
-        toGray(frame, gray_, pool_.get());
-    }
-    const Image* input = &gray_;
-    processScale_ = 1.0f;
-    if (options_.processWidth > 0 && frame.width > options_.processWidth) {
-        auto t = profiler_.scope("resize");
-        const int w = options_.processWidth;
-        const int h = static_cast<int>(std::lround(double(frame.height) * w / frame.width));
-        resizeBilinear(gray_, w, h, processed_, pool_.get());
-        processScale_ = float(frame.width) / w;
-        input = &processed_;
-    }
+void Reconstructor::addFeatures(FrameFeatures&& features) {
+    processScale_ = features.processScale;
     if (frameCount_ == 0) {
-        imageWidth_ = input->width;
-        imageHeight_ = input->height;
-        intrinsics_ = CameraIntrinsics::fromFov(input->width, input->height, options_.fovDeg);
+        imageWidth_ = features.width;
+        imageHeight_ = features.height;
+        intrinsics_ = CameraIntrinsics::fromFov(features.width, features.height, options_.fovDeg);
     }
-    {
-        auto t = profiler_.scope("orb");
-        orb_.extract(*input, keypoints_, descriptors_);
-    }
+    keypoints_ = std::move(features.keypoints);
+    descriptors_ = std::move(features.descriptors);
+    colors_ = std::move(features.colors);
 
     trackedPoints_.assign(keypoints_.size(), -1);
     trackedCount_ = 0;
@@ -79,12 +62,12 @@ void Reconstructor::addFrame(const FrameView& frame) {
 
     if (state_ == State::Initializing) {
         auto t = profiler_.scope("init");
-        tryInitialize(frame);
+        tryInitialize();
     } else {
         bool ok;
         {
             auto t = profiler_.scope("track");
-            ok = track(frame);
+            ok = track();
         }
         if (ok) {
             state_ = State::Tracking;
@@ -103,7 +86,7 @@ void Reconstructor::addFrame(const FrameView& frame) {
                                      trackedCount_ < 2 * mp.minTrackedPoints;
             if (gap >= mp.minKeyframeGap && (viewChanged || gap >= mp.maxKeyframeGap)) {
                 auto t = profiler_.scope("mapping");
-                addKeyframe(frame);
+                addKeyframe();
             }
         } else {
             state_ = State::Lost;
@@ -115,13 +98,13 @@ void Reconstructor::addFrame(const FrameView& frame) {
     ++frameCount_;
 }
 
-void Reconstructor::tryInitialize(const FrameView& frame) {
+void Reconstructor::tryInitialize() {
     const MappingParams& mp = options_.mapping;
     FrameData current;
     current.index = static_cast<long>(frameCount_);
     current.keypoints = keypoints_;
     current.descriptors = descriptors_;
-    sampleColors(frame, current);
+    current.colors = colors_;
 
     if (reference_.index < 0 || static_cast<int>(reference_.keypoints.size()) < mp.minInitialPoints) {
         reference_ = std::move(current);
@@ -355,7 +338,7 @@ int Reconstructor::solveAndRefine(const Pose& prior, const std::vector<int>& loc
     return inliers;
 }
 
-bool Reconstructor::track(const FrameView& /*frame*/) {
+bool Reconstructor::track() {
     if (keyframes_.empty()) return false;
     const MappingParams& mp = options_.mapping;
     const Keyframe& lastKf = keyframes_.back();
@@ -398,17 +381,13 @@ bool Reconstructor::track(const FrameView& /*frame*/) {
     return true;
 }
 
-void Reconstructor::addKeyframe(const FrameView& frame) {
-    FrameData data;
-    data.keypoints = keypoints_;
-    sampleColors(frame, data);
-
+void Reconstructor::addKeyframe() {
     Keyframe kf;
     kf.frameIndex = static_cast<long>(frameCount_);
     kf.pose = pose_;
     kf.keypoints = keypoints_;
     kf.descriptors = descriptors_;
-    kf.colors = std::move(data.colors);
+    kf.colors = colors_;
     kf.pointIds = trackedPoints_;
     for (std::size_t k = 0; k < kf.pointIds.size(); ++k) {
         const int id = kf.pointIds[k];

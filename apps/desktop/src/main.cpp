@@ -6,7 +6,9 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -32,7 +34,9 @@ void printUsage() {
         "  -o <file.ply>               output point cloud (default: cloud.ply)\n"
         "  --trajectory <file.ply>     also write the keyframe camera positions\n"
         "  --width <px>                processing width, 0 = full resolution (default 960)\n"
-        "  --threads <n>               worker threads, 0 = all hardware threads (default 0)\n"
+        "  --threads <n>               worker threads for tracking/mapping, 0 = all hardware threads (default 0)\n"
+        "  --extract-workers <n>       frames whose features are extracted in parallel, 0 = all hardware threads\n"
+        "  --serial                    extract features inside the reconstructor, one frame at a time\n"
         "  --fov <deg>                 assumed horizontal field of view of the camera (default 65)\n"
         "  --dump <dir>                write debug images: <dir>/tracking (every --dump-every frames)\n"
         "                              and <dir>/map.bmp (top and side view of the result)\n"
@@ -89,6 +93,8 @@ int main(int argc, char** argv) {
     vg::Reconstructor::Options options;
     std::string dumpDir;
     long dumpEvery = 25;
+    bool serial = false;
+    int extractWorkers = 0;
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--version") == 0) {
@@ -107,6 +113,10 @@ int main(int argc, char** argv) {
             options.processWidth = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--threads") == 0 && i + 1 < argc) {
             options.threads = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
+        } else if (std::strcmp(argv[i], "--serial") == 0) {
+            serial = true;
+        } else if (std::strcmp(argv[i], "--extract-workers") == 0 && i + 1 < argc) {
+            extractWorkers = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--fov") == 0 && i + 1 < argc) {
             options.fovDeg = std::strtod(argv[++i], nullptr);
         } else if (std::strcmp(argv[i], "--dump") == 0 && i + 1 < argc) {
@@ -175,10 +185,25 @@ int main(int argc, char** argv) {
 
     using Clock = std::chrono::steady_clock;
     const auto start = Clock::now();
+    // Decode thread -> feature pipeline (many frames extracted in parallel) ->
+    // this thread (tracking and mapping, in order). --serial instead extracts
+    // inside the reconstructor, one frame at a time.
     FramePrefetcher frames(reader);
+    std::unique_ptr<vg::FeaturePipeline> pipeline;
+    std::thread feeder;
+    if (!serial) {
+        pipeline = std::make_unique<vg::FeaturePipeline>(options.processWidth, options.orb, extractWorkers);
+        std::printf("extract: %d frames in parallel\n", pipeline->workers());
+        feeder = std::thread([&] {
+            vg::FrameView f;
+            while (frames.next(f)) pipeline->push(f);
+            pipeline->close();
+        });
+    }
+    vg::FrameFeatures features;
     while (true) {
         const auto waitStart = Clock::now();
-        if (!frames.next(frame)) break;
+        if (serial ? !frames.next(frame) : !pipeline->pop(features, &frame)) break;
         decodeWaitMs += std::chrono::duration<double, std::milli>(Clock::now() - waitStart).count();
 
         if (index == saveFrameIndex) {
@@ -198,7 +223,11 @@ int main(int argc, char** argv) {
         };
         const double orbBefore = stageTotal("orb"), trackBefore = stageTotal("track"),
                      mappingBefore = stageTotal("mapping");
-        reconstructor.addFrame(frame);
+        if (serial) {
+            reconstructor.addFrame(frame);
+        } else {
+            reconstructor.addFeatures(std::move(features));
+        }
         const double orbMs = stageTotal("orb") - orbBefore, trackMs = stageTotal("track") - trackBefore,
                      mappingMs = stageTotal("mapping") - mappingBefore;
         totalFeatures += static_cast<long long>(reconstructor.lastKeypoints().size());
@@ -224,6 +253,7 @@ int main(int argc, char** argv) {
         lastTimestamp = frame.timestamp;
         ++index;
     }
+    if (feeder.joinable()) feeder.join();
     const double seconds = std::chrono::duration<double>(Clock::now() - start).count();
     frameLog.close();
 
