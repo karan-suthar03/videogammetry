@@ -28,6 +28,7 @@ void printUsage() {
         "  --threads <n>               worker threads, 0 = all hardware threads (default 0)\n"
         "  --match-gap <n>             match frame t against frame t-n (default 1)\n"
         "  --search-radius <px>        match search radius in processed pixels, 0 = everywhere (default 100)\n"
+        "  --fov <deg>                 assumed horizontal field of view of the camera (default 65)\n"
         "  --dump <dir>                write debug images to <dir>/features and <dir>/matches\n"
         "  --dump-every <n>            frame interval for --dump (default 25)\n"
         "  --save-frame <n> <file>     write decoded frame n (0-based) as .bmp or .ppm\n");
@@ -41,6 +42,13 @@ bool ensureDir(const std::filesystem::path& dir) {
         return false;
     }
     return true;
+}
+
+double median(std::vector<double> v) {
+    if (v.empty()) return 0.0;
+    auto mid = v.begin() + static_cast<std::ptrdiff_t>(v.size() / 2);
+    std::nth_element(v.begin(), mid, v.end());
+    return *mid;
 }
 
 std::string numbered(const std::filesystem::path& dir, const char* prefix, long index) {
@@ -79,6 +87,8 @@ int main(int argc, char** argv) {
             options.matchGap = std::max(1, static_cast<int>(std::strtol(argv[++i], nullptr, 10)));
         } else if (std::strcmp(argv[i], "--search-radius") == 0 && i + 1 < argc) {
             options.match.searchRadius = std::strtof(argv[++i], nullptr);
+        } else if (std::strcmp(argv[i], "--fov") == 0 && i + 1 < argc) {
+            options.fovDeg = std::strtod(argv[++i], nullptr);
         } else if (std::strcmp(argv[i], "--dump") == 0 && i + 1 < argc) {
             dumpDir = argv[++i];
         } else if (std::strcmp(argv[i], "--dump-every") == 0 && i + 1 < argc) {
@@ -141,6 +151,8 @@ int main(int argc, char** argv) {
     long matchedFrames = 0;
     long long sumCandidates = 0, sumDistance = 0, sumCross = 0, sumFinal = 0;
     int minMatches = -1;
+    long poseAttempts = 0, poseOk = 0;
+    std::vector<double> inlierRatios, rotationsDeg, forwardness, parallaxDeg, ransacIterations;
 
     using Clock = std::chrono::steady_clock;
     const auto start = Clock::now();
@@ -172,6 +184,19 @@ int main(int argc, char** argv) {
             if (minMatches < 0 || ms.afterOrientation < minMatches) minMatches = ms.afterOrientation;
         }
 
+        const vg::TwoViewResult& pose = reconstructor.lastPose();
+        if (!matches.empty()) {
+            ++poseAttempts;
+            if (pose.ok) {
+                ++poseOk;
+                inlierRatios.push_back(double(pose.inliers) / matches.size());
+                rotationsDeg.push_back(vg::rotationAngle(pose.R) * 180.0 / 3.14159265358979);
+                forwardness.push_back(std::abs(pose.t.z));
+                parallaxDeg.push_back(pose.medianParallaxDeg);
+                ransacIterations.push_back(pose.iterations);
+            }
+        }
+
         if (!dumpDir.empty()) {
             const float s = reconstructor.processScale();
             recentRgb.push_back(resizeRgb(frame, static_cast<int>(std::lround(frame.width / s)),
@@ -192,7 +217,8 @@ int main(int argc, char** argv) {
                     if (writeImage(img.view(), numbered(matchesDir, "matches", index))) ++dumped;
                     const RgbImage flow = drawFlow(recentRgb.back(), reconstructor.matchedFrameKeypoints(),
                                                    reconstructor.lastKeypoints(), matches,
-                                                   options.match.maxDistance);
+                                                   options.match.maxDistance,
+                                                   pose.inlier.size() == matches.size() ? &pose.inlier : nullptr);
                     if (writeImage(flow.view(), numbered(matchesDir, "flow", index))) ++dumped;
                 }
             }
@@ -216,6 +242,12 @@ int main(int argc, char** argv) {
         std::printf("matches: %.0f/frame avg (min %d) | funnel per frame: %.0f with candidates -> "
                     "%.0f distance+ratio -> %.0f cross-check -> %.0f orientation\n",
                     sumFinal / n, minMatches, sumCandidates / n, sumDistance / n, sumCross / n, sumFinal / n);
+    }
+    if (poseAttempts > 0) {
+        std::printf("pose:    %ld/%ld frame pairs solved | median: inliers %.0f%% of matches, rotation %.2f deg, "
+                    "|t_z| %.2f (1 = straight ahead), parallax %.2f deg, %.0f RANSAC iterations\n",
+                    poseOk, poseAttempts, 100 * median(inlierRatios), median(rotationsDeg), median(forwardness),
+                    median(parallaxDeg), median(ransacIterations));
     }
 
     std::printf("\n  %-10s %10s %10s %10s\n", "stage", "total ms", "avg ms", "max ms");

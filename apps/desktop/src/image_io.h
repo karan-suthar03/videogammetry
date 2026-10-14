@@ -37,9 +37,12 @@ RgbImage drawMatches(const RgbImage& top, const std::vector<vg::Keypoint>& topKe
 
 // Draws each match on `image` as a line from the train keypoint (earlier
 // position) to a dot at the query keypoint (current position): optical flow.
+// With `inlier` flags (parallel to matches): inliers green, outliers red;
+// otherwise colored by descriptor distance.
 RgbImage drawFlow(const RgbImage& image, const std::vector<vg::Keypoint>& trainKeypoints,
                   const std::vector<vg::Keypoint>& queryKeypoints,
-                  const std::vector<vg::Match>& matches, int maxDistance);
+                  const std::vector<vg::Match>& matches, int maxDistance,
+                  const std::vector<std::uint8_t>* inlier = nullptr);
 
 // Writes an RGB8 frame. Format is chosen by extension: .bmp, otherwise binary .ppm.
 bool writeImage(const vg::FrameView& frame, const std::string& path);

@@ -73,7 +73,7 @@ CMakePresets.json      presets: windows (MSVC), linux (Ninja)
 - Build Linux: `cmake --preset linux && cmake --build --preset linux-release` (needs `g++`/`clang++`, `cmake`, `ninja`, `pkg-config`, FFmpeg dev packages; untested)
 - Build Android: open `apps/android` in Android Studio (needs NDK + CMake from SDK Manager)
 - Tests: `ctest --test-dir build/windows -C Release`
-- Visual output: `videogammetry.exe sample_video/street_walk_10s.mp4 -o test_output/cloud.ply --dump test_output [--match-gap 10]` writes `features/` (keypoints) and `matches/` (stacked `matches_*` and `flow_*`) images (`.bmp`) into `test_output/` (git-ignored)
+- Visual output: `videogammetry.exe sample_video/street_walk_10s.mp4 -o test_output/cloud.ply --dump test_output [--match-gap 10]` writes `features/` (keypoints) and `matches/` (stacked `matches_*`, and `flow_*` with geometric inliers green / outliers red) images (`.bmp`) into `test_output/` (git-ignored)
 - ORB descriptor pattern: learned offline by `tools/train_orb_pattern` into `core/src/orb_pattern.inc` (committed); retrain when more varied footage is available
 
 ## 7. Interface
@@ -106,5 +106,5 @@ CMakePresets.json      presets: windows (MSVC), linux (Ninja)
 
 ## 11. Open questions
 - Which libraries count as "existing parts" we're allowed to use (OpenCV? Eigen? Ceres?) vs. what we write ourselves (feature detector? BA solver?)
-- Camera calibration: do we calibrate the phone once, or estimate intrinsics from the video?
+- Camera calibration: do we calibrate the phone once, or estimate intrinsics from the video? Finding (2026-10-14): on the street clip (forward walking, little rotation) two-view geometry fits equally well for any FOV from 40 to 100 deg, so focal length is **not** observable from this footage; default is 65 deg (`--fov`). Needs calibration, metadata, or bundle adjustment over rotating motion.
 - Test videos: what scenes, what device?

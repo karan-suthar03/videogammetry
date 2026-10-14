@@ -36,6 +36,10 @@ void Reconstructor::addFrame(const FrameView& frame) {
         input = &processed_;
     }
 
+    if (frameCount_ == 0) {
+        intrinsics_ = CameraIntrinsics::fromFov(input->width, input->height, options_.fovDeg);
+    }
+
     // Reuse the oldest history slot's buffers for the new frame.
     const std::size_t keep = static_cast<std::size_t>(std::max(options_.matchGap, 1)) + 1;
     FrameFeatures current;
@@ -59,7 +63,25 @@ void Reconstructor::addFrame(const FrameView& frame) {
                       options_.match, matches_, &matchStats_, pool_.get());
     }
 
-    // TODO(phase 1): pose estimation, triangulation.
+    pose_ = {};
+    if (!matches_.empty()) {
+        auto t = profiler_.scope("geometry");
+        const FrameFeatures& query = history_.back();
+        const FrameFeatures& train = history_.front();
+        points1_.resize(matches_.size());
+        points2_.resize(matches_.size());
+        for (std::size_t i = 0; i < matches_.size(); ++i) {
+            const Keypoint& a = train.keypoints[matches_[i].train];
+            const Keypoint& b = query.keypoints[matches_[i].query];
+            points1_[i] = intrinsics_.normalize(a.x, a.y);
+            points2_[i] = intrinsics_.normalize(b.x, b.y);
+        }
+        TwoViewParams params = options_.twoView;
+        params.seed += static_cast<std::uint32_t>(frameCount_);  // deterministic, varies per frame
+        pose_ = estimateRelativePose(points1_, points2_, intrinsics_.fx, params, pool_.get());
+    }
+
+    // TODO(phase 1): triangulation, mapping.
     ++frameCount_;
 }
 

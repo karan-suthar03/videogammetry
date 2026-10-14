@@ -12,6 +12,7 @@
 #include "videogammetry/point_cloud.h"
 #include "videogammetry/profiler.h"
 #include "videogammetry/thread_pool.h"
+#include "videogammetry/two_view.h"
 
 namespace vg {
 
@@ -23,8 +24,10 @@ public:
         int processWidth = 960;  // frames wider than this are downscaled first; 0 = full size
         int threads = 0;         // worker threads: 0 = all hardware threads, 1 = single-threaded
         int matchGap = 1;        // match frame t against frame t - matchGap
+        double fovDeg = 65.0;    // assumed horizontal field of view (camera is uncalibrated)
         OrbParams orb;
         MatchParams match;
+        TwoViewParams twoView;
     };
 
     Reconstructor() : Reconstructor(Options{}) {}
@@ -47,6 +50,12 @@ public:
     const std::vector<Keypoint>& matchedFrameKeypoints() const {
         return history_.empty() ? kNoFeatures.keypoints : history_.front().keypoints;
     }
+    // Relative pose of the most recent frame w.r.t. frame t - matchGap, with
+    // per-match inlier flags (parallel to lastMatches()).
+    const TwoViewResult& lastPose() const { return pose_; }
+    // Camera model of the processed image (valid after the first frame).
+    const CameraIntrinsics& intrinsics() const { return intrinsics_; }
+
     // Input-frame pixels per processed-image pixel (>= 1).
     float processScale() const { return processScale_; }
     // Threads used per frame (including the caller).
@@ -70,6 +79,9 @@ private:
     std::deque<FrameFeatures> history_;  // oldest first; back() is the current frame
     std::vector<Match> matches_;
     MatchStats matchStats_;
+    TwoViewResult pose_;
+    CameraIntrinsics intrinsics_;
+    std::vector<Vec2> points1_, points2_;  // normalized match coordinates (reused)
     float processScale_ = 1.0f;
 
     std::size_t frameCount_ = 0;

@@ -200,7 +200,8 @@ RgbImage drawMatches(const RgbImage& top, const std::vector<vg::Keypoint>& topKe
 
 RgbImage drawFlow(const RgbImage& image, const std::vector<vg::Keypoint>& trainKeypoints,
                   const std::vector<vg::Keypoint>& queryKeypoints,
-                  const std::vector<vg::Match>& matches, int maxDistance) {
+                  const std::vector<vg::Match>& matches, int maxDistance,
+                  const std::vector<std::uint8_t>* inlier) {
     RgbImage out = image;
     for (auto& p : out.pixels) p = static_cast<std::uint8_t>(p * 6 / 10);
 
@@ -212,11 +213,29 @@ RgbImage drawFlow(const RgbImage& image, const std::vector<vg::Keypoint>& trainK
         p[2] = c[2];
     };
 
-    for (const vg::Match& m : matches) {
+    // Outliers first so inliers are drawn on top.
+    std::vector<std::size_t> order(matches.size());
+    for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+    if (inlier) {
+        std::stable_partition(order.begin(), order.end(), [&](std::size_t i) { return !(*inlier)[i]; });
+    }
+
+    for (std::size_t k : order) {
+        const vg::Match& m = matches[k];
         const vg::Keypoint& a = trainKeypoints[m.train];
         const vg::Keypoint& b = queryKeypoints[m.query];
-        const float t = std::clamp(static_cast<float>(m.distance) / std::max(maxDistance, 1), 0.0f, 1.0f);
-        const std::uint8_t color[3] = {static_cast<std::uint8_t>(255 * t), static_cast<std::uint8_t>(255 * (1 - t)), 40};
+        std::uint8_t color[3];
+        if (inlier) {
+            const bool in = (*inlier)[k] != 0;
+            color[0] = in ? 60 : 255;
+            color[1] = in ? 230 : 40;
+            color[2] = in ? 60 : 40;
+        } else {
+            const float t = std::clamp(static_cast<float>(m.distance) / std::max(maxDistance, 1), 0.0f, 1.0f);
+            color[0] = static_cast<std::uint8_t>(255 * t);
+            color[1] = static_cast<std::uint8_t>(255 * (1 - t));
+            color[2] = 40;
+        }
         const int steps = static_cast<int>(std::max(std::abs(b.x - a.x), std::abs(b.y - a.y))) + 1;
         for (int i = 0; i <= steps; ++i) {
             const float s = static_cast<float>(i) / steps;
