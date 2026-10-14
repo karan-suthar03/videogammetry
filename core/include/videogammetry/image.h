@@ -7,6 +7,8 @@
 
 namespace vg {
 
+class ThreadPool;
+
 // Owning 8-bit grayscale image, tightly packed (stride == width).
 struct Image {
     int width = 0;
@@ -25,13 +27,16 @@ struct Image {
     std::uint8_t* row(int y) { return data.data() + static_cast<std::size_t>(y) * width; }
 };
 
+// All operations split work by rows across `pool` when one is given; the
+// result is identical with or without a pool.
+
 // Converts any FrameView format to grayscale (BT.601 luma).
-void toGray(const FrameView& frame, Image& out);
+void toGray(const FrameView& frame, Image& out, ThreadPool* pool = nullptr);
 
 // Bilinear resize to (width, height).
-void resizeBilinear(const Image& src, int width, int height, Image& out);
+void resizeBilinear(const Image& src, int width, int height, Image& out, ThreadPool* pool = nullptr);
 
 // 7x7 Gaussian blur, sigma = 2 (used to smooth images before sampling descriptors).
-void gaussianBlur7(const Image& src, Image& out);
+void gaussianBlur7(const Image& src, Image& out, ThreadPool* pool = nullptr);
 
 }  // namespace vg

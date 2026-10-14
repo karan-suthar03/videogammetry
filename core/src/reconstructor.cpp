@@ -4,14 +4,24 @@
 
 namespace vg {
 
-Reconstructor::Reconstructor(const Options& options) : options_(options), orb_(options.orb) {}
+namespace {
+
+std::unique_ptr<ThreadPool> makePool(int threads) {
+    const int n = threads > 0 ? threads : ThreadPool::hardwareThreads();
+    return n > 1 ? std::make_unique<ThreadPool>(n) : nullptr;
+}
+
+}  // namespace
+
+Reconstructor::Reconstructor(const Options& options)
+    : options_(options), pool_(makePool(options.threads)), orb_(options.orb, pool_.get()) {}
 
 void Reconstructor::addFrame(const FrameView& frame) {
     if (frame.data == nullptr || frame.width <= 0 || frame.height <= 0) return;
 
     {
         auto t = profiler_.scope("gray");
-        toGray(frame, gray_);
+        toGray(frame, gray_, pool_.get());
     }
 
     const Image* input = &gray_;
@@ -20,7 +30,7 @@ void Reconstructor::addFrame(const FrameView& frame) {
         auto t = profiler_.scope("resize");
         const int w = options_.processWidth;
         const int h = static_cast<int>(std::lround(double(frame.height) * w / frame.width));
-        resizeBilinear(gray_, w, h, processed_);
+        resizeBilinear(gray_, w, h, processed_, pool_.get());
         processScale_ = float(frame.width) / w;
         input = &processed_;
     }

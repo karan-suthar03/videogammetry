@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <vector>
 
 #include "videogammetry/frame.h"
@@ -8,6 +9,7 @@
 #include "videogammetry/orb.h"
 #include "videogammetry/point_cloud.h"
 #include "videogammetry/profiler.h"
+#include "videogammetry/thread_pool.h"
 
 namespace vg {
 
@@ -17,6 +19,7 @@ class Reconstructor {
 public:
     struct Options {
         int processWidth = 960;  // frames wider than this are downscaled first; 0 = full size
+        int threads = 0;         // worker threads: 0 = all hardware threads, 1 = single-threaded
         OrbParams orb;
     };
 
@@ -34,9 +37,12 @@ public:
     const std::vector<Descriptor>& lastDescriptors() const { return descriptors_; }
     // Input-frame pixels per processed-image pixel (>= 1).
     float processScale() const { return processScale_; }
+    // Threads used per frame (including the caller).
+    int threadCount() const { return pool_ ? pool_->size() : 1; }
 
 private:
     Options options_;
+    std::unique_ptr<ThreadPool> pool_;  // null when single-threaded; declared before orb_
     OrbExtractor orb_;
     Profiler profiler_;
 

@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "frame_prefetcher.h"
 #include "image_io.h"
 #include "video_reader.h"
 #include "videogammetry/reconstructor.h"
@@ -23,8 +24,11 @@ void printUsage() {
         "Options:\n"
         "  -o <file.ply>               output point cloud (default: cloud.ply)\n"
         "  --width <px>                processing width, 0 = full resolution (default 960)\n"
-        "  --save-frame <n> <file>     also write decoded frame n (0-based) as a .ppm image\n"
-        "  --save-features <n> <file>  write frame n with its ORB keypoints drawn, as .ppm\n");
+        "  --threads <n>               worker threads, 0 = all hardware threads (default 0)\n"
+        "  --save-frame <n> <file>     write decoded frame n (0-based) as .bmp or .ppm\n"
+        "  --save-features <n> <file>  write frame n with its ORB keypoints drawn (.bmp or .ppm)\n"
+        "  --dump-features <dir>       write keypoint images into <dir> every --dump-every frames\n"
+        "  --dump-every <n>            frame interval for --dump-features (default 25)\n");
 }
 
 }  // namespace
@@ -53,6 +57,8 @@ int main(int argc, char** argv) {
             output = argv[++i];
         } else if (std::strcmp(argv[i], "--width") == 0 && i + 1 < argc) {
             options.processWidth = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
+        } else if (std::strcmp(argv[i], "--threads") == 0 && i + 1 < argc) {
+            options.threads = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--save-frame") == 0 && i + 2 < argc) {
             saveFrameIndex = std::strtol(argv[++i], nullptr, 10);
             saveFramePath = argv[++i];
@@ -106,19 +112,23 @@ int main(int argc, char** argv) {
     }
 
     vg::Reconstructor reconstructor(options);
+    std::printf("threads: %d of %d hardware threads (+ background decode)\n",
+                reconstructor.threadCount(), vg::ThreadPool::hardwareThreads());
+
     long dumped = 0;
     vg::FrameView frame;
     long index = 0;
     double lastTimestamp = 0.0;
-    double decodeMs = 0.0;
+    double decodeWaitMs = 0.0;
     long long totalFeatures = 0;
 
     using Clock = std::chrono::steady_clock;
     const auto start = Clock::now();
+    FramePrefetcher frames(reader);
     while (true) {
-        const auto decodeStart = Clock::now();
-        if (!reader.read(frame)) break;
-        decodeMs += std::chrono::duration<double, std::milli>(Clock::now() - decodeStart).count();
+        const auto waitStart = Clock::now();
+        if (!frames.next(frame)) break;
+        decodeWaitMs += std::chrono::duration<double, std::milli>(Clock::now() - waitStart).count();
 
         if (index == saveFrameIndex) {
             if (writeImage(frame, saveFramePath)) {
@@ -163,8 +173,8 @@ int main(int argc, char** argv) {
     }
     const double seconds = std::chrono::duration<double>(Clock::now() - start).count();
 
-    if (!reader.lastError().empty()) {
-        std::fprintf(stderr, "error: %s (after %ld frames)\n", reader.lastError().c_str(), index);
+    if (!frames.error().empty()) {
+        std::fprintf(stderr, "error: %s (after %ld frames)\n", frames.error().c_str(), index);
         return 1;
     }
 
@@ -173,7 +183,8 @@ int main(int argc, char** argv) {
                 index, lastTimestamp, index ? double(totalFeatures) / index : 0.0);
 
     std::printf("\n  %-10s %10s %10s %10s\n", "stage", "total ms", "avg ms", "max ms");
-    std::printf("  %-10s %10.1f %10.2f %10s\n", "decode", decodeMs, index ? decodeMs / index : 0.0, "-");
+    // Decoding runs on its own thread; this is only the time spent waiting for it.
+    std::printf("  %-10s %10.1f %10.2f %10s\n", "decode*", decodeWaitMs, index ? decodeWaitMs / index : 0.0, "-");
     double coreMs = 0.0;
     for (const vg::Profiler::Stage& st : reconstructor.profiler().stages()) {
         std::printf("  %-10s %10.1f %10.2f %10.2f\n", st.name.c_str(), st.totalMs, st.avgMs(), st.maxMs);

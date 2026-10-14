@@ -11,6 +11,7 @@
 
 #include "videogammetry/image.h"
 #include "videogammetry/orb.h"
+#include "videogammetry/thread_pool.h"
 
 namespace {
 
@@ -136,9 +137,28 @@ int main() {
     check(repeat >= 0.6, "at least 60% of keypoints re-detected after rotation", repeat);
     check(median(angleErrors) < 0.1, "median orientation error < 0.1 rad", median(angleErrors));
     check(median(distances) < 30, "median matched descriptor distance < 30 / 256 bits", median(distances));
-    // Smoke check only (catches constant/degenerate descriptors). Synthetic patches are
-    // smoother than real ones; real-footage quality is measured separately (~116 median).
-    check(median(randomDistances) > 60, "median unrelated descriptor distance > 60 / 256 bits", median(randomDistances));
+    check(median(randomDistances) > 90, "median unrelated descriptor distance > 90 / 256 bits", median(randomDistances));
+
+    // Multi-threaded extraction must give exactly the single-threaded result.
+    {
+        vg::ThreadPool pool(8);  // fixed size so the test is the same on every machine
+        vg::OrbExtractor parallelOrb(params, &pool);
+        bool identical = true;
+        for (const vg::Image* img : {&a, &b}) {
+            std::vector<vg::Keypoint> ks, kp;
+            std::vector<vg::Descriptor> ds, dp;
+            orb.extract(*img, ks, ds);
+            for (int run = 0; run < 3; ++run) {  // repeat to shake out races
+                parallelOrb.extract(*img, kp, dp);
+                identical = identical && ks.size() == kp.size() && ds == dp;
+                for (std::size_t i = 0; identical && i < ks.size(); ++i) {
+                    identical = ks[i].x == kp[i].x && ks[i].y == kp[i].y && ks[i].angle == kp[i].angle &&
+                                ks[i].response == kp[i].response && ks[i].level == kp[i].level;
+                }
+            }
+        }
+        check(identical, "8-thread output identical to single-threaded (3 runs x 2 images)", identical ? 1.0 : 0.0);
+    }
 
     std::printf("%s\n", failures ? "FAILED" : "OK");
     return failures ? 1 : 0;

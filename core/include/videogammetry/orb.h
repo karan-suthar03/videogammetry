@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "videogammetry/image.h"
+#include "videogammetry/thread_pool.h"
 
 namespace vg {
 
@@ -37,7 +38,8 @@ struct OrbParams {
 // spread over the image using a per-level grid.
 class OrbExtractor {
 public:
-    explicit OrbExtractor(const OrbParams& params = {});
+    // With a pool, every stage runs in parallel; output is identical either way.
+    explicit OrbExtractor(const OrbParams& params = {}, ThreadPool* pool = nullptr);
 
     // Detects keypoints on `gray` and computes one descriptor per keypoint.
     void extract(const Image& gray, std::vector<Keypoint>& keypoints,
@@ -59,12 +61,15 @@ private:
     void detectLevel(int level, int budget, std::vector<Corner>& out);
 
     OrbParams params_;
+    ThreadPool* pool_ = nullptr;
     std::vector<float> scales_;
     std::vector<int> budgets_;
     std::vector<Image> pyramid_;
     std::vector<Image> blurred_;
     std::vector<float> scoreMap_;   // reused NMS buffer
     std::vector<Corner> candidates_;
+    std::vector<std::vector<Corner>> rowCandidates_;
+    std::vector<std::uint8_t> isLocalMax_;
 };
 
 }  // namespace vg

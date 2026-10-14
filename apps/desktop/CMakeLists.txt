@@ -4,6 +4,7 @@
 add_library(videogammetry_video STATIC
     src/video_reader.cpp
     src/image_io.cpp
+    src/frame_prefetcher.cpp
 )
 target_include_directories(videogammetry_video PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(videogammetry_video PUBLIC videogammetry::core FFmpeg::FFmpeg)

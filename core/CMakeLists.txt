@@ -11,6 +11,7 @@ add_library(videogammetry_core STATIC
     src/point_cloud.cpp
     src/profiler.cpp
     src/reconstructor.cpp
+    src/thread_pool.cpp
 )
 add_library(videogammetry::core ALIAS videogammetry_core)
 
@@ -29,3 +30,6 @@ else()
 endif()
 
 set_target_properties(videogammetry_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+find_package(Threads REQUIRED)
+target_link_libraries(videogammetry_core PUBLIC Threads::Threads)
