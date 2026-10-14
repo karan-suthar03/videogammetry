@@ -247,3 +247,117 @@ RgbImage drawFlow(const RgbImage& image, const std::vector<vg::Keypoint>& trainK
     }
     return out;
 }
+
+RgbImage drawTracking(const vg::FrameView& frame, const std::vector<vg::Keypoint>& keypoints,
+                      const std::vector<int>& trackedIds, float processScale) {
+    RgbImage out;
+    out.width = frame.width;
+    out.height = frame.height;
+    out.pixels.resize(static_cast<std::size_t>(frame.width) * frame.height * 3);
+    for (int y = 0; y < frame.height; ++y) {
+        const std::uint8_t* src = frame.data + static_cast<std::size_t>(y) * frame.stride;
+        std::uint8_t* dst = out.pixels.data() + static_cast<std::size_t>(y) * frame.width * 3;
+        for (int i = 0; i < frame.width * 3; ++i) dst[i] = static_cast<std::uint8_t>(src[i] * 6 / 10);
+    }
+    const auto plot = [&](int x, int y, const std::uint8_t* c) {
+        if (x < 0 || y < 0 || x >= out.width || y >= out.height) return;
+        std::uint8_t* p = out.pixels.data() + (static_cast<std::size_t>(y) * out.width + x) * 3;
+        p[0] = c[0];
+        p[1] = c[1];
+        p[2] = c[2];
+    };
+    static constexpr std::uint8_t kTracked[3] = {60, 240, 60};
+    static constexpr std::uint8_t kUntracked[3] = {230, 60, 60};
+    for (std::size_t i = 0; i < keypoints.size(); ++i) {
+        const bool tracked = i < trackedIds.size() && trackedIds[i] >= 0;
+        const std::uint8_t* c = tracked ? kTracked : kUntracked;
+        const float cx = (keypoints[i].x + 0.5f) * processScale - 0.5f;
+        const float cy = (keypoints[i].y + 0.5f) * processScale - 0.5f;
+        const float r = tracked ? 5.0f : 3.0f;
+        for (int k = 0; k < 24; ++k) {
+            const float a = 6.2831853f * k / 24;
+            plot(static_cast<int>(std::lround(cx + r * std::cos(a))), static_cast<int>(std::lround(cy + r * std::sin(a))), c);
+        }
+    }
+    return out;
+}
+
+RgbImage renderMapViews(const std::vector<vg::Point>& points, const std::vector<vg::Vec3>& cameraPath,
+                        int panelSize) {
+    RgbImage out;
+    out.width = panelSize * 2 + 10;
+    out.height = panelSize;
+    out.pixels.assign(static_cast<std::size_t>(out.width) * out.height * 3, 24);
+
+    // Each view: (horizontal, vertical) world axes; vertical grows upward.
+    struct View {
+        int offsetX;
+        double (*h)(double, double, double);
+        double (*v)(double, double, double);
+    };
+    const View views[2] = {
+        {0, [](double x, double, double) { return x; }, [](double, double, double z) { return z; }},
+        {panelSize + 10, [](double, double, double z) { return z; }, [](double, double y, double) { return -y; }},
+    };
+
+    for (const View& view : views) {
+        // Robust bounds: 2nd-98th percentile of points, always including the camera path.
+        std::vector<double> hs, vs;
+        for (const vg::Point& p : points) {
+            hs.push_back(view.h(p.x, p.y, p.z));
+            vs.push_back(view.v(p.x, p.y, p.z));
+        }
+        double h0 = 1e300, h1 = -1e300, v0 = 1e300, v1 = -1e300;
+        if (!hs.empty()) {
+            std::sort(hs.begin(), hs.end());
+            std::sort(vs.begin(), vs.end());
+            const std::size_t lo = hs.size() / 50, hi = hs.size() - 1 - hs.size() / 50;
+            h0 = hs[lo];
+            h1 = hs[hi];
+            v0 = vs[lo];
+            v1 = vs[hi];
+        }
+        for (const vg::Vec3& c : cameraPath) {
+            h0 = std::min(h0, view.h(c.x, c.y, c.z));
+            h1 = std::max(h1, view.h(c.x, c.y, c.z));
+            v0 = std::min(v0, view.v(c.x, c.y, c.z));
+            v1 = std::max(v1, view.v(c.x, c.y, c.z));
+        }
+        if (!(h1 > h0) || !(v1 > v0)) continue;
+        const double span = std::max(h1 - h0, v1 - v0) * 1.05;
+        const double hc = 0.5 * (h0 + h1), vc = 0.5 * (v0 + v1);
+        const double scale = (panelSize - 1) / span;
+
+        const auto toPixel = [&](double h, double v, int& px, int& py) {
+            px = view.offsetX + static_cast<int>(std::lround((h - hc) * scale + panelSize / 2.0));
+            py = static_cast<int>(std::lround(panelSize / 2.0 - (v - vc) * scale));
+            return px >= view.offsetX && px < view.offsetX + panelSize && py >= 0 && py < panelSize;
+        };
+        const auto plot = [&](int x, int y, std::uint8_t r, std::uint8_t g, std::uint8_t b) {
+            std::uint8_t* p = out.pixels.data() + (static_cast<std::size_t>(y) * out.width + x) * 3;
+            p[0] = r;
+            p[1] = g;
+            p[2] = b;
+        };
+
+        for (const vg::Point& p : points) {
+            int x, y;
+            if (toPixel(view.h(p.x, p.y, p.z), view.v(p.x, p.y, p.z), x, y)) plot(x, y, p.r, p.g, p.b);
+        }
+        for (std::size_t i = 0; i < cameraPath.size(); ++i) {
+            const vg::Vec3& c = cameraPath[i];
+            int x, y;
+            if (!toPixel(view.h(c.x, c.y, c.z), view.v(c.x, c.y, c.z), x, y)) continue;
+            const bool start = i == 0;
+            for (int dy = -2; dy <= 2; ++dy) {
+                for (int dx = -2; dx <= 2; ++dx) {
+                    const int px = x + dx, py = y + dy;
+                    if (px >= view.offsetX && px < view.offsetX + panelSize && py >= 0 && py < panelSize) {
+                        plot(px, py, start ? 60 : 255, start ? 255 : 50, 50);
+                    }
+                }
+            }
+        }
+    }
+    return out;
+}

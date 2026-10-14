@@ -6,7 +6,9 @@
 
 #include "videogammetry/frame.h"
 #include "videogammetry/matcher.h"
+#include "videogammetry/linalg.h"
 #include "videogammetry/orb.h"
+#include "videogammetry/point_cloud.h"
 
 // Owning, tightly packed RGB8 image.
 struct RgbImage {
@@ -43,6 +45,17 @@ RgbImage drawFlow(const RgbImage& image, const std::vector<vg::Keypoint>& trainK
                   const std::vector<vg::Keypoint>& queryKeypoints,
                   const std::vector<vg::Match>& matches, int maxDistance,
                   const std::vector<std::uint8_t>* inlier = nullptr);
+
+// Draws the frame's keypoints: green if tracked to a map point (trackedIds[i]
+// >= 0), red otherwise. Keypoints are in processed pixels.
+RgbImage drawTracking(const vg::FrameView& frame, const std::vector<vg::Keypoint>& keypoints,
+                      const std::vector<int>& trackedIds, float processScale);
+
+// Renders the map from above (X right, Z up) and from the side (Z right,
+// -Y up), side by side. Points keep their color; the camera path is drawn
+// in red with the start marked green. Bounds ignore the farthest 2% of points.
+RgbImage renderMapViews(const std::vector<vg::Point>& points, const std::vector<vg::Vec3>& cameraPath,
+                        int panelSize);
 
 // Writes an RGB8 frame. Format is chosen by extension: .bmp, otherwise binary .ppm.
 bool writeImage(const vg::FrameView& frame, const std::string& path);

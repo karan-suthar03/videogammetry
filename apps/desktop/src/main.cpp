@@ -4,7 +4,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <deque>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -24,12 +23,12 @@ void printUsage() {
         "\n"
         "Options:\n"
         "  -o <file.ply>               output point cloud (default: cloud.ply)\n"
+        "  --trajectory <file.ply>     also write the keyframe camera positions\n"
         "  --width <px>                processing width, 0 = full resolution (default 960)\n"
         "  --threads <n>               worker threads, 0 = all hardware threads (default 0)\n"
-        "  --match-gap <n>             match frame t against frame t-n (default 1)\n"
-        "  --search-radius <px>        match search radius in processed pixels, 0 = everywhere (default 100)\n"
         "  --fov <deg>                 assumed horizontal field of view of the camera (default 65)\n"
-        "  --dump <dir>                write debug images to <dir>/features and <dir>/matches\n"
+        "  --dump <dir>                write debug images: <dir>/tracking (every --dump-every frames)\n"
+        "                              and <dir>/map.bmp (top and side view of the result)\n"
         "  --dump-every <n>            frame interval for --dump (default 25)\n"
         "  --save-frame <n> <file>     write decoded frame n (0-based) as .bmp or .ppm\n");
 }
@@ -44,17 +43,19 @@ bool ensureDir(const std::filesystem::path& dir) {
     return true;
 }
 
-double median(std::vector<double> v) {
-    if (v.empty()) return 0.0;
-    auto mid = v.begin() + static_cast<std::ptrdiff_t>(v.size() / 2);
-    std::nth_element(v.begin(), mid, v.end());
-    return *mid;
-}
-
 std::string numbered(const std::filesystem::path& dir, const char* prefix, long index) {
     char name[64];
     std::snprintf(name, sizeof(name), "%s_%05ld.bmp", prefix, index);
     return (dir / name).string();
+}
+
+const char* stateName(vg::Reconstructor::State s) {
+    switch (s) {
+        case vg::Reconstructor::State::Initializing: return "initializing";
+        case vg::Reconstructor::State::Tracking: return "tracking";
+        case vg::Reconstructor::State::Lost: return "lost";
+    }
+    return "?";
 }
 
 }  // namespace
@@ -62,6 +63,7 @@ std::string numbered(const std::filesystem::path& dir, const char* prefix, long 
 int main(int argc, char** argv) {
     std::string input;
     std::string output = "cloud.ply";
+    std::string trajectoryPath;
     long saveFrameIndex = -1;
     std::string saveFramePath;
     vg::Reconstructor::Options options;
@@ -79,14 +81,12 @@ int main(int argc, char** argv) {
         }
         if (std::strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output = argv[++i];
+        } else if (std::strcmp(argv[i], "--trajectory") == 0 && i + 1 < argc) {
+            trajectoryPath = argv[++i];
         } else if (std::strcmp(argv[i], "--width") == 0 && i + 1 < argc) {
             options.processWidth = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--threads") == 0 && i + 1 < argc) {
             options.threads = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
-        } else if (std::strcmp(argv[i], "--match-gap") == 0 && i + 1 < argc) {
-            options.matchGap = std::max(1, static_cast<int>(std::strtol(argv[++i], nullptr, 10)));
-        } else if (std::strcmp(argv[i], "--search-radius") == 0 && i + 1 < argc) {
-            options.match.searchRadius = std::strtof(argv[++i], nullptr);
         } else if (std::strcmp(argv[i], "--fov") == 0 && i + 1 < argc) {
             options.fovDeg = std::strtod(argv[++i], nullptr);
         } else if (std::strcmp(argv[i], "--dump") == 0 && i + 1 < argc) {
@@ -126,33 +126,23 @@ int main(int argc, char** argv) {
     std::printf("\n");
 
     const bool downscaled = options.processWidth > 0 && info.width > options.processWidth;
-    std::printf("process: %d px wide%s, matching frame t vs t-%d within %.0f px\n",
-                downscaled ? options.processWidth : info.width,
-                downscaled ? " (downscaled)" : " (full resolution)",
-                options.matchGap, options.match.searchRadius);
+    std::printf("process: %d px wide%s, assumed FOV %.0f deg\n", downscaled ? options.processWidth : info.width,
+                downscaled ? " (downscaled)" : " (full resolution)", options.fovDeg);
 
-    const std::filesystem::path featuresDir = std::filesystem::path(dumpDir) / "features";
-    const std::filesystem::path matchesDir = std::filesystem::path(dumpDir) / "matches";
-    if (!dumpDir.empty() && (!ensureDir(featuresDir) || !ensureDir(matchesDir))) return 1;
+    const std::filesystem::path trackingDir = std::filesystem::path(dumpDir) / "tracking";
+    if (!dumpDir.empty() && !ensureDir(trackingDir)) return 1;
 
     vg::Reconstructor reconstructor(options);
     std::printf("threads: %d of %d hardware threads (+ background decode)\n",
                 reconstructor.threadCount(), vg::ThreadPool::hardwareThreads());
-
-    // Processed-size RGB copies of the last matchGap + 1 frames, for match images.
-    std::deque<RgbImage> recentRgb;
 
     long dumped = 0;
     vg::FrameView frame;
     long index = 0;
     double lastTimestamp = 0.0;
     double decodeWaitMs = 0.0;
-    long long totalFeatures = 0;
-    long matchedFrames = 0;
-    long long sumCandidates = 0, sumDistance = 0, sumCross = 0, sumFinal = 0;
-    int minMatches = -1;
-    long poseAttempts = 0, poseOk = 0;
-    std::vector<double> inlierRatios, rotationsDeg, forwardness, parallaxDeg, ransacIterations;
+    long long totalFeatures = 0, totalTracked = 0;
+    long initializedAt = -1;
 
     using Clock = std::chrono::steady_clock;
     const auto start = Clock::now();
@@ -172,56 +162,13 @@ int main(int argc, char** argv) {
 
         reconstructor.addFrame(frame);
         totalFeatures += static_cast<long long>(reconstructor.lastKeypoints().size());
+        totalTracked += reconstructor.lastTrackedCount();
+        if (initializedAt < 0 && reconstructor.state() == vg::Reconstructor::State::Tracking) initializedAt = index;
 
-        const auto& matches = reconstructor.lastMatches();
-        const vg::MatchStats& ms = reconstructor.lastMatchStats();
-        if (ms.candidates > 0) {
-            ++matchedFrames;
-            sumCandidates += ms.candidates;
-            sumDistance += ms.afterDistance;
-            sumCross += ms.afterCrossCheck;
-            sumFinal += ms.afterOrientation;
-            if (minMatches < 0 || ms.afterOrientation < minMatches) minMatches = ms.afterOrientation;
-        }
-
-        const vg::TwoViewResult& pose = reconstructor.lastPose();
-        if (!matches.empty()) {
-            ++poseAttempts;
-            if (pose.ok) {
-                ++poseOk;
-                inlierRatios.push_back(double(pose.inliers) / matches.size());
-                rotationsDeg.push_back(vg::rotationAngle(pose.R) * 180.0 / 3.14159265358979);
-                forwardness.push_back(std::abs(pose.t.z));
-                parallaxDeg.push_back(pose.medianParallaxDeg);
-                ransacIterations.push_back(pose.iterations);
-            }
-        }
-
-        if (!dumpDir.empty()) {
-            const float s = reconstructor.processScale();
-            recentRgb.push_back(resizeRgb(frame, static_cast<int>(std::lround(frame.width / s)),
-                                          static_cast<int>(std::lround(frame.height / s))));
-            if (recentRgb.size() > static_cast<std::size_t>(options.matchGap) + 1) recentRgb.pop_front();
-
-            if (index % dumpEvery == 0) {
-                std::vector<std::uint8_t> drawn = drawKeypoints(frame, reconstructor.lastKeypoints(), s);
-                vg::FrameView view = frame;
-                view.data = drawn.data();
-                view.stride = frame.width * 3;
-                if (writeImage(view, numbered(featuresDir, "features", index))) ++dumped;
-
-                if (!matches.empty() && recentRgb.size() == static_cast<std::size_t>(options.matchGap) + 1) {
-                    const RgbImage img = drawMatches(recentRgb.front(), reconstructor.matchedFrameKeypoints(),
-                                                     recentRgb.back(), reconstructor.lastKeypoints(), matches,
-                                                     options.match.maxDistance);
-                    if (writeImage(img.view(), numbered(matchesDir, "matches", index))) ++dumped;
-                    const RgbImage flow = drawFlow(recentRgb.back(), reconstructor.matchedFrameKeypoints(),
-                                                   reconstructor.lastKeypoints(), matches,
-                                                   options.match.maxDistance,
-                                                   pose.inlier.size() == matches.size() ? &pose.inlier : nullptr);
-                    if (writeImage(flow.view(), numbered(matchesDir, "flow", index))) ++dumped;
-                }
-            }
+        if (!dumpDir.empty() && index % dumpEvery == 0) {
+            const RgbImage img = drawTracking(frame, reconstructor.lastKeypoints(), reconstructor.lastTrackedPoints(),
+                                              reconstructor.processScale());
+            if (writeImage(img.view(), numbered(trackingDir, "tracking", index))) ++dumped;
         }
 
         lastTimestamp = frame.timestamp;
@@ -234,40 +181,66 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (dumped) std::printf("dumped:  %ld images to %s\n", dumped, dumpDir.c_str());
+    const vg::Reconstructor::Stats& st = reconstructor.stats();
+    const vg::PointCloud cloud = reconstructor.pointCloud();
+    const std::vector<vg::Vec3> path = reconstructor.trajectory();
+
     std::printf("frames:  %ld (last t=%.3f s), %.0f ORB features/frame avg\n",
                 index, lastTimestamp, index ? double(totalFeatures) / index : 0.0);
-    if (matchedFrames > 0) {
-        const double n = static_cast<double>(matchedFrames);
-        std::printf("matches: %.0f/frame avg (min %d) | funnel per frame: %.0f with candidates -> "
-                    "%.0f distance+ratio -> %.0f cross-check -> %.0f orientation\n",
-                    sumFinal / n, minMatches, sumCandidates / n, sumDistance / n, sumCross / n, sumFinal / n);
-    }
-    if (poseAttempts > 0) {
-        std::printf("pose:    %ld/%ld frame pairs solved | median: inliers %.0f%% of matches, rotation %.2f deg, "
-                    "|t_z| %.2f (1 = straight ahead), parallax %.2f deg, %.0f RANSAC iterations\n",
-                    poseOk, poseAttempts, 100 * median(inlierRatios), median(rotationsDeg), median(forwardness),
-                    median(parallaxDeg), median(ransacIterations));
+    if (initializedAt >= 0) {
+        std::printf("map:     initialized at frame %ld; tracked %d frames (%.0f map points/frame avg), "
+                    "lost %d frames, %d map(s)\n",
+                    initializedAt, st.trackedFrames, st.trackedFrames ? double(totalTracked) / st.trackedFrames : 0.0,
+                    st.lostFrames, st.maps);
+        std::printf("         %zu keyframes, %zu map points (in output); wide searches %d, keyframe re-matches %d; "
+                    "final state: %s\n",
+                    path.size(), cloud.points.size(), st.wideSearches, st.keyframeSearches,
+                    stateName(reconstructor.state()));
+    } else {
+        std::printf("map:     not initialized (not enough parallax/matches between frames)\n");
     }
 
     std::printf("\n  %-10s %10s %10s %10s\n", "stage", "total ms", "avg ms", "max ms");
     // Decoding runs on its own thread; this is only the time spent waiting for it.
     std::printf("  %-10s %10.1f %10.2f %10s\n", "decode*", decodeWaitMs, index ? decodeWaitMs / index : 0.0, "-");
     double coreMs = 0.0;
-    for (const vg::Profiler::Stage& st : reconstructor.profiler().stages()) {
-        std::printf("  %-10s %10.1f %10.2f %10.2f\n", st.name.c_str(), st.totalMs, st.avgMs(), st.maxMs);
-        coreMs += st.totalMs;
+    for (const vg::Profiler::Stage& s : reconstructor.profiler().stages()) {
+        std::printf("  %-10s %10.1f %10.2f %10.2f\n", s.name.c_str(), s.totalMs, s.avgMs(), s.maxMs);
+        coreMs += s.totalMs;
     }
     std::printf("  %-10s %10.1f %10.2f\n", "all", seconds * 1000.0, index ? seconds * 1000.0 / index : 0.0);
     std::printf("\nthroughput: %.1f fps overall, %.1f fps core only (video is %.2f fps)\n",
                 seconds > 0 ? index / seconds : 0.0,
                 coreMs > 0 ? index / (coreMs / 1000.0) : 0.0, info.fps);
 
-    if (!vg::writePly(reconstructor.pointCloud(), output)) {
+    if (!vg::writePly(cloud, output)) {
         std::fprintf(stderr, "error: could not write %s\n", output.c_str());
         return 1;
     }
-    std::printf("output:  %s (%zu points; reconstruction not implemented yet)\n",
-                output.c_str(), reconstructor.pointCloud().points.size());
+    std::printf("output:  %s (%zu points)\n", output.c_str(), cloud.points.size());
+
+    if (!trajectoryPath.empty()) {
+        vg::PointCloud traj;
+        for (const vg::Vec3& c : path) {
+            vg::Point p;
+            p.x = static_cast<float>(c.x);
+            p.y = static_cast<float>(c.y);
+            p.z = static_cast<float>(c.z);
+            p.r = 255;
+            p.g = 40;
+            p.b = 40;
+            traj.points.push_back(p);
+        }
+        if (vg::writePly(traj, trajectoryPath)) {
+            std::printf("output:  %s (%zu camera positions)\n", trajectoryPath.c_str(), traj.points.size());
+        }
+    }
+
+    if (!dumpDir.empty()) {
+        const RgbImage views = renderMapViews(cloud.points, path, 700);
+        const std::string mapPath = (std::filesystem::path(dumpDir) / "map.bmp").string();
+        if (writeImage(views.view(), mapPath)) ++dumped;
+        std::printf("dumped:  %ld images to %s (map views: %s)\n", dumped, dumpDir.c_str(), mapPath.c_str());
+    }
     return 0;
 }

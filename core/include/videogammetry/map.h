@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -9,14 +10,16 @@
 namespace vg {
 
 struct MapPoint {
-    Vec3 position;  // world coordinates
-    std::uint8_t r = 255, g = 255, b = 255;
-    int observations = 0;  // keyframes that see this point
+    Vec3 position;          // world coordinates
+    Descriptor descriptor;  // from the most recent observation
+    int level = 0;          // pyramid level of that observation
+    std::array<std::uint8_t, 3> color{255, 255, 255};
+    int observations = 0;   // keyframes that see this point
 };
 
 struct Keyframe {
     long frameIndex = 0;  // index of the video frame
-    Pose pose;
+    Pose pose;            // world -> camera
     std::vector<Keypoint> keypoints;
     std::vector<Descriptor> descriptors;
     std::vector<std::array<std::uint8_t, 3>> colors;  // RGB at each keypoint
@@ -24,12 +27,27 @@ struct Keyframe {
 };
 
 struct MappingParams {
-    double minKeyframeParallaxDeg = 1.0;  // new keyframe once median parallax reaches this
-    int maxKeyframeGap = 30;              // ... or after this many frames
+    // Initialization (needs some parallax; the camera can move in any direction).
+    double minInitParallaxDeg = 1.0;
+    int minInitialPoints = 100;
+    int maxReferenceAge = 60;  // frames before the initialization reference is replaced
+
+    // Tracking against the map (any motion: uses 2D-3D matches, no parallax needed).
+    int localKeyframes = 10;         // map points of this many recent keyframes are projected
+    float projectionRadiusPx = 15;   // search radius around projected map points
+    float wideRadiusPx = 60;         // retry radius when few matches (fast motion)
+    int minTrackedPoints = 30;
+    int maxLostFrames = 25;          // then start a new map
+
+    // Keyframes: inserted when the view has changed enough.
+    double keyframeTrackedRatio = 0.7;  // tracked points below this share of the last keyframe's
+    int minKeyframeGap = 2;
+    int maxKeyframeGap = 30;
+
+    // Triangulation of new points between keyframes.
     double minTriangulationAngleDeg = 1.0;
     double maxReprojectionErrorPx = 2.0;
-    int minInitialPoints = 100;           // points needed to accept the initial pair
-    int minScalePoints = 15;              // shared map points needed to propagate scale
+    int triangulationKeyframes = 2;  // previous keyframes to triangulate against
 };
 
 }  // namespace vg
