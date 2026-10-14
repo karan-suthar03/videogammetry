@@ -1,0 +1,25 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "windows",
+      "displayName": "Windows (MSVC)",
+      "generator": "Visual Studio 18 2026",
+      "binaryDir": "${sourceDir}/build/windows",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "linux",
+      "displayName": "Linux (Ninja)",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/linux",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "windows-release", "configurePreset": "windows", "configuration": "Release" },
+    { "name": "windows-debug",   "configurePreset": "windows", "configuration": "Debug" },
+    { "name": "linux-release",   "configurePreset": "linux",   "configuration": "Release" },
+    { "name": "linux-debug",     "configurePreset": "linux",   "configuration": "Debug" }
+  ]
+}

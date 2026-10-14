@@ -1,0 +1,32 @@
+# Third-party reference repos (cloned separately, not part of this project)
+references/
+
+# Downloaded third-party binaries (see scripts/fetch_ffmpeg_windows.ps1)
+third_party/
+
+# Sample/test videos (large; download links in sample_video/SOURCES.md)
+sample_video/*
+!sample_video/SOURCES.md
+
+# Build output
+build/
+out/
+cmake-build-*/
+
+# Android / Gradle
+.gradle/
+local.properties
+.cxx/
+apps/android/app/build/
+apps/android/build/
+*.apk
+
+# Generated results
+*.ply
+output/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
