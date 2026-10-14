@@ -5,16 +5,17 @@ plugins {
 android {
     namespace = "com.videogammetry"
     compileSdk = 35
+    ndkVersion = "27.0.12077973"
 
     defaultConfig {
         applicationId = "com.videogammetry"
-        minSdk = 24
+        minSdk = 29  // MediaStore Downloads and MediaMetadataRetriever frame-by-index APIs
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
 
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            abiFilters += listOf("arm64-v8a")
         }
         externalNativeBuild {
             cmake {
