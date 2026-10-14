@@ -6,7 +6,10 @@ set(VG_CORE_VERSION 0.1.0)
 
 add_library(videogammetry_core STATIC
     src/version.cpp
+    src/image.cpp
+    src/orb.cpp
     src/point_cloud.cpp
+    src/profiler.cpp
     src/reconstructor.cpp
 )
 add_library(videogammetry::core ALIAS videogammetry_core)
@@ -14,13 +17,13 @@ add_library(videogammetry::core ALIAS videogammetry_core)
 target_include_directories(videogammetry_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-target_compile_features(videogammetry_core PUBLIC cxx_std_17)
+target_compile_features(videogammetry_core PUBLIC cxx_std_20)
 
 target_compile_definitions(videogammetry_core PRIVATE
     VG_VERSION_STRING="${VG_CORE_VERSION}")
 
 if(MSVC)
-    target_compile_options(videogammetry_core PRIVATE /W4 /permissive-)
+    target_compile_options(videogammetry_core PRIVATE /W4 /permissive- /utf-8)
 else()
     target_compile_options(videogammetry_core PRIVATE -Wall -Wextra -Wpedantic)
 endif()

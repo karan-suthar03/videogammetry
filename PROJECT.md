@@ -55,11 +55,13 @@ Take a video as input and produce a **3D point cloud** of the filmed scene. The 
 One platform-independent C++ core, plus thin per-platform apps that include it.
 
 ```
-core/                  C++17 static library (namespace vg): the whole pipeline
+core/                  C++20 static library (namespace vg): the whole pipeline
   include/videogammetry/   public API: FrameView, Reconstructor, PointCloud, writePly
   src/
 apps/desktop/          CLI for Windows + Linux (+ macOS), same source
 apps/android/          Gradle project; JNI bridge (app/src/main/cpp) links core
+tools/                 offline dev tools (train_orb_pattern)
+tests/                 unit tests (CTest)
 CMakeLists.txt         root: builds core + desktop app
 CMakePresets.json      presets: windows (MSVC), linux (Ninja)
 ```
@@ -70,6 +72,9 @@ CMakePresets.json      presets: windows (MSVC), linux (Ninja)
 - Run: `build/windows/apps/desktop/Release/videogammetry.exe sample_video/street_walk_10s.mp4 -o cloud.ply [--save-frame <n> frame.ppm]`
 - Build Linux: `cmake --preset linux && cmake --build --preset linux-release` (needs `g++`/`clang++`, `cmake`, `ninja`, `pkg-config`, FFmpeg dev packages; untested)
 - Build Android: open `apps/android` in Android Studio (needs NDK + CMake from SDK Manager)
+- Tests: `ctest --test-dir build/windows -C Release`
+- Visual output: `videogammetry.exe sample_video/street_walk_10s.mp4 -o test_output/cloud.ply --dump-features test_output/features` writes keypoint images (`.bmp`) into `test_output/` (git-ignored)
+- ORB descriptor pattern: learned offline by `tools/train_orb_pattern` into `core/src/orb_pattern.inc` (committed); retrain when more varied footage is available
 
 ## 7. Interface
 - CLI first (`videogammetry input.mp4 -o cloud.ply`)
@@ -78,7 +83,7 @@ CMakePresets.json      presets: windows (MSVC), linux (Ninja)
 ## 8. Tech constraints
 - **OS:** cross-platform (developed on Windows 11)
 - **GPU:** none. CPU only for now (machine has NVIDIA, intentionally unused)
-- **Language:** C++17 core; Java (JNI) shim on Android
+- **Language:** C++20 core; Java (JNI) shim on Android
 - **References:** `references/colmap`, `references/ORB_SLAM3`
 - **Allowed libraries (candidates):** <!-- e.g. OpenCV (video I/O, features, geometry), Eigen (math), Ceres (bundle adjustment) -->
 

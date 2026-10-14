@@ -22,6 +22,7 @@ apps/android/build/
 *.apk
 
 # Generated results
+test_output/
 *.ply
 output/
 
