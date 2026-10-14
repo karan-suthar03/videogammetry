@@ -33,7 +33,7 @@ double medianOf(std::vector<double> v) {
 Reconstructor::Reconstructor(const Options& options)
     : options_(options),
       pool_(makePool(options.threads)),
-      extractor_(options.processWidth, options.orb, pool_.get()) {}
+      extractor_(options.processSize, options.orb, pool_.get()) {}
 
 void Reconstructor::addFrame(const FrameView& frame) {
     if (frame.data == nullptr || frame.width <= 0 || frame.height <= 0) return;

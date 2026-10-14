@@ -36,9 +36,9 @@ namespace vg {
 class Reconstructor {
 public:
     struct Options {
-        int processWidth = 960;  // frames wider than this are downscaled first; 0 = full size
+        int processSize = 960;   // long side of the frame is downscaled to this; 0 = full size
         int threads = 0;         // worker threads: 0 = all hardware threads, 1 = single-threaded
-        double fovDeg = 65.0;    // assumed horizontal field of view (camera is uncalibrated)
+        double fovDeg = 65.0;    // assumed field of view across the long side (camera is uncalibrated)
         OrbParams orb;
         MatchParams match;       // used for keyframe-to-keyframe and initialization matching
         TwoViewParams twoView;

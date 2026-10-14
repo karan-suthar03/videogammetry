@@ -5,8 +5,8 @@
 
 namespace vg {
 
-FeatureExtractor::FeatureExtractor(int processWidth, const OrbParams& orb, ThreadPool* pool)
-    : processWidth_(processWidth), pool_(pool), orb_(orb, pool) {}
+FeatureExtractor::FeatureExtractor(int processSize, const OrbParams& orb, ThreadPool* pool)
+    : processSize_(processSize), pool_(pool), orb_(orb, pool) {}
 
 void FeatureExtractor::extract(const FrameView& frame, long index, FrameFeatures& out) {
     out.index = index;
@@ -15,9 +15,11 @@ void FeatureExtractor::extract(const FrameView& frame, long index, FrameFeatures
     toGray(frame, gray_, pool_);
     const Image* input = &gray_;
     out.processScale = 1.0f;
-    if (processWidth_ > 0 && frame.width > processWidth_) {
-        const int w = processWidth_;
-        const int h = static_cast<int>(std::lround(double(frame.height) * w / frame.width));
+    const int longSide = std::max(frame.width, frame.height);
+    if (processSize_ > 0 && longSide > processSize_) {
+        const double s = double(longSide) / processSize_;
+        const int w = static_cast<int>(std::lround(frame.width / s));
+        const int h = static_cast<int>(std::lround(frame.height / s));
         resizeBilinear(gray_, w, h, processed_, pool_);
         out.processScale = float(frame.width) / w;
         input = &processed_;
@@ -40,8 +42,8 @@ void FeatureExtractor::extract(const FrameView& frame, long index, FrameFeatures
     }
 }
 
-FeaturePipeline::FeaturePipeline(int processWidth, const OrbParams& orb, int workers)
-    : processWidth_(processWidth), orb_(orb) {
+FeaturePipeline::FeaturePipeline(int processSize, const OrbParams& orb, int workers)
+    : processSize_(processSize), orb_(orb) {
     const int n = workers > 0 ? workers : ThreadPool::hardwareThreads();
     maxInFlight_ = static_cast<std::size_t>(n) + 4;  // keep every worker busy, bound memory
     for (int i = 0; i < n; ++i) threads_.emplace_back([this] { work(); });
@@ -88,7 +90,7 @@ void FeaturePipeline::close() {
 }
 
 void FeaturePipeline::work() {
-    FeatureExtractor extractor(processWidth_, orb_);  // single-threaded: parallelism is across frames
+    FeatureExtractor extractor(processSize_, orb_);  // single-threaded: parallelism is across frames
     while (true) {
         Job* job = nullptr;
         {

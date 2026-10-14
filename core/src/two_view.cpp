@@ -7,10 +7,10 @@
 
 namespace vg {
 
-CameraIntrinsics CameraIntrinsics::fromFov(int width, int height, double horizontalFovDeg) {
+CameraIntrinsics CameraIntrinsics::fromFov(int width, int height, double longSideFovDeg) {
     CameraIntrinsics k;
-    const double halfFov = horizontalFovDeg * 3.14159265358979323846 / 360.0;
-    k.fx = k.fy = 0.5 * width / std::tan(halfFov);
+    const double halfFov = longSideFovDeg * 3.14159265358979323846 / 360.0;
+    k.fx = k.fy = 0.5 * std::max(width, height) / std::tan(halfFov);
     k.cx = 0.5 * width - 0.5;  // pixel centers are at integer coordinates
     k.cy = 0.5 * height - 0.5;
     return k;

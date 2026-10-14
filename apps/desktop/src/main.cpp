@@ -33,11 +33,11 @@ void printUsage() {
         "Options:\n"
         "  -o <file.ply>               output point cloud (default: cloud.ply)\n"
         "  --trajectory <file.ply>     also write the keyframe camera positions\n"
-        "  --width <px>                processing width, 0 = full resolution (default 960)\n"
+        "  --size <px>                 long side of the frame is downscaled to this, 0 = full resolution (default 960)\n"
         "  --threads <n>               worker threads for tracking/mapping, 0 = all hardware threads (default 0)\n"
         "  --extract-workers <n>       frames whose features are extracted in parallel, 0 = all hardware threads\n"
         "  --serial                    extract features inside the reconstructor, one frame at a time\n"
-        "  --fov <deg>                 assumed horizontal field of view of the camera (default 65)\n"
+        "  --fov <deg>                 assumed field of view across the long side of the frame (default 65)\n"
         "  --dump <dir>                write debug images: <dir>/tracking (every --dump-every frames)\n"
         "                              and <dir>/map.bmp (top and side view of the result)\n"
         "  --dump-every <n>            frame interval for --dump (default 25)\n"
@@ -109,8 +109,8 @@ int main(int argc, char** argv) {
             output = argv[++i];
         } else if (std::strcmp(argv[i], "--trajectory") == 0 && i + 1 < argc) {
             trajectoryPath = argv[++i];
-        } else if (std::strcmp(argv[i], "--width") == 0 && i + 1 < argc) {
-            options.processWidth = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
+        } else if (std::strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
+            options.processSize = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--threads") == 0 && i + 1 < argc) {
             options.threads = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--serial") == 0) {
@@ -157,9 +157,12 @@ int main(int argc, char** argv) {
     }
     std::printf("\n");
 
-    const bool downscaled = options.processWidth > 0 && info.width > options.processWidth;
-    std::printf("process: %d px wide%s, assumed FOV %.0f deg\n", downscaled ? options.processWidth : info.width,
-                downscaled ? " (downscaled)" : " (full resolution)", options.fovDeg);
+    const int longSide = std::max(info.width, info.height);
+    const bool downscaled = options.processSize > 0 && longSide > options.processSize;
+    const double shrink = downscaled ? double(longSide) / options.processSize : 1.0;
+    std::printf("process: %ldx%ld%s, assumed FOV %.0f deg across the long side\n", std::lround(info.width / shrink),
+                std::lround(info.height / shrink), downscaled ? " (downscaled)" : " (full resolution)",
+                options.fovDeg);
 
     const std::filesystem::path trackingDir = std::filesystem::path(dumpDir) / "tracking";
     if (!dumpDir.empty() && !ensureDir(trackingDir)) return 1;
@@ -192,7 +195,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<vg::FeaturePipeline> pipeline;
     std::thread feeder;
     if (!serial) {
-        pipeline = std::make_unique<vg::FeaturePipeline>(options.processWidth, options.orb, extractWorkers);
+        pipeline = std::make_unique<vg::FeaturePipeline>(options.processSize, options.orb, extractWorkers);
         std::printf("extract: %d frames in parallel\n", pipeline->workers());
         feeder = std::thread([&] {
             vg::FrameView f;

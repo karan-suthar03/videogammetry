@@ -32,12 +32,14 @@ struct FrameFeatures {
 // Not thread-safe; use one per thread.
 class FeatureExtractor {
 public:
-    FeatureExtractor(int processWidth, const OrbParams& orb, ThreadPool* pool = nullptr);
+    // processSize: the long side of the frame is downscaled to this many pixels
+    // (0 = full resolution), so portrait and landscape are treated alike.
+    FeatureExtractor(int processSize, const OrbParams& orb, ThreadPool* pool = nullptr);
 
     void extract(const FrameView& frame, long index, FrameFeatures& out);
 
 private:
-    int processWidth_;
+    int processSize_;
     ThreadPool* pool_;
     OrbExtractor orb_;
     Image gray_, processed_;
@@ -49,7 +51,7 @@ private:
 class FeaturePipeline {
 public:
     // workers <= 0: all hardware threads.
-    FeaturePipeline(int processWidth, const OrbParams& orb, int workers = 0);
+    FeaturePipeline(int processSize, const OrbParams& orb, int workers = 0);
     ~FeaturePipeline();
     FeaturePipeline(const FeaturePipeline&) = delete;
     FeaturePipeline& operator=(const FeaturePipeline&) = delete;
@@ -78,7 +80,7 @@ private:
 
     std::vector<std::thread> threads_;
     std::size_t maxInFlight_;
-    int processWidth_;
+    int processSize_;
     OrbParams orb_;
 
     std::mutex mutex_;

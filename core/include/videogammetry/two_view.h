@@ -12,8 +12,10 @@ namespace vg {
 struct CameraIntrinsics {
     double fx = 0, fy = 0, cx = 0, cy = 0;
 
-    // Square pixels, principal point at the image center, given horizontal FOV.
-    static CameraIntrinsics fromFov(int width, int height, double horizontalFovDeg);
+    // Square pixels, principal point at the image center, given the field of
+    // view across the long side (the same for portrait and landscape video
+    // from one camera).
+    static CameraIntrinsics fromFov(int width, int height, double longSideFovDeg);
 
     Vec2 normalize(double u, double v) const { return {(u - cx) / fx, (v - cy) / fy}; }
 };
