@@ -13,3 +13,7 @@ add_test(NAME two_view COMMAND test_two_view)
 add_executable(test_pnp test_pnp.cpp)
 target_link_libraries(test_pnp PRIVATE videogammetry::core)
 add_test(NAME pnp COMMAND test_pnp)
+
+add_executable(test_bundle_adjustment test_bundle_adjustment.cpp)
+target_link_libraries(test_bundle_adjustment PRIVATE videogammetry::core)
+add_test(NAME bundle_adjustment COMMAND test_bundle_adjustment)

@@ -6,6 +6,7 @@ set(VG_CORE_VERSION 0.1.0)
 
 add_library(videogammetry_core STATIC
     src/version.cpp
+    src/bundle_adjustment.cpp
     src/features.cpp
     src/image.cpp
     src/linalg.cpp
