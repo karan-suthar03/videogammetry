@@ -265,6 +265,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    reconstructor.finish();  // global bundle adjustment
     const vg::Reconstructor::Stats& st = reconstructor.stats();
     const vg::PointCloud cloud = reconstructor.pointCloud();
     const std::vector<vg::Vec3> path = reconstructor.trajectory();
@@ -280,6 +281,16 @@ int main(int argc, char** argv) {
                     "final state: %s\n",
                     path.size(), cloud.points.size(), st.wideSearches, st.keyframeSearches,
                     stateName(reconstructor.state()));
+        if (st.localBAs > 0) {
+            std::printf("ba:      local x%d: reprojection %.2f -> %.2f px avg, %d observations rejected\n", st.localBAs,
+                        st.localBARmsBefore / st.localBAs, st.localBARmsAfter / st.localBAs, st.localBAOutliers);
+        }
+        if (st.globalBA.ok) {
+            std::printf("         global (%d keyframes, %d points): reprojection %.2f -> %.2f px, %d iterations, "
+                        "%d observations rejected\n",
+                        st.globalBACameras, st.globalBAPoints, st.globalBA.initialRmsPx, st.globalBA.finalRmsPx,
+                        st.globalBA.iterations, st.globalBA.outliers);
+        }
     } else {
         std::printf("map:     not initialized (not enough parallax/matches between frames)\n");
     }

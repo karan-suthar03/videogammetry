@@ -15,6 +15,7 @@ struct MapPoint {
     int level = 0;          // pyramid level of that observation
     std::array<std::uint8_t, 3> color{255, 255, 255};
     int observations = 0;   // keyframes that see this point
+    bool bad = false;       // rejected (e.g. by bundle adjustment); ignored everywhere
 };
 
 struct Keyframe {
@@ -54,6 +55,11 @@ struct MappingParams {
     int triangulationKeyframes = 4;
     int triangulationSearch = 15;
     double minBaselineRatio = 0.02;
+
+    // Bundle adjustment.
+    int localBAKeyframes = 10;    // keyframes refined after each new keyframe (0 = off)
+    int localBAIterations = 10;
+    int globalBAIterations = 20;  // full refinement in finish() (0 = off)
 };
 
 }  // namespace vg

@@ -212,7 +212,7 @@ std::vector<int> Reconstructor::localPoints() const {
     const int first = std::max(0, static_cast<int>(keyframes_.size()) - options_.mapping.localKeyframes);
     for (int k = static_cast<int>(keyframes_.size()) - 1; k >= first; --k) {
         for (int id : keyframes_[k].pointIds) {
-            if (id >= 0 && !seen[id]) {
+            if (id >= 0 && !seen[id] && !points_[id].bad) {
                 seen[id] = 1;
                 ids.push_back(id);
             }
@@ -369,7 +369,8 @@ bool Reconstructor::track() {
         matchFeatures(keypoints_, descriptors_, lastKf.keypoints, lastKf.descriptors, matchParams, matches,
                       nullptr, pool_.get());
         for (const Match& m : matches) {
-            if (lastKf.pointIds[m.train] >= 0) pok[m.query] = lastKf.pointIds[m.train];
+            const int id = lastKf.pointIds[m.train];
+            if (id >= 0 && !points_[id].bad) pok[m.query] = id;
         }
         tracked = solveAndRefine(lastKf.pose, local, pok, pose);
     }
@@ -416,6 +417,19 @@ void Reconstructor::addKeyframe() {
     // Most recent qualifying keyframes first: enough parallax, most shared view.
     if (static_cast<int>(partners.size()) > mp.triangulationKeyframes) partners.resize(mp.triangulationKeyframes);
     for (const auto& [ratio, k] : partners) triangulateBetween(keyframes_[k], keyframes_[n - 1]);
+
+    if (mp.localBAKeyframes > 0) {
+        const BAReport r = adjust(std::max(0, n - mp.localBAKeyframes), mp.localBAIterations);
+        if (r.ok) {
+            ++stats_.localBAs;
+            stats_.localBARmsBefore += r.initialRmsPx;
+            stats_.localBARmsAfter += r.finalRmsPx;
+            stats_.localBAOutliers += r.outliers;
+            // The current frame is the newest keyframe: continue from its refined pose.
+            pose_ = keyframes_.back().pose;
+            previousPose_ = pose_;
+        }
+    }
     trackedPoints_ = keyframes_.back().pointIds;
 }
 
@@ -427,6 +441,85 @@ double Reconstructor::medianSceneDepth(const Keyframe& kf) const {
         if (z > 0) depths.push_back(z);
     }
     return medianOf(std::move(depths));
+}
+
+BAReport Reconstructor::adjust(int firstKeyframe, int iterations) {
+    const int nk = static_cast<int>(keyframes_.size());
+    if (nk < 2 || firstKeyframe >= nk) return {};
+
+    // Points seen by the keyframes being adjusted.
+    std::vector<int> pointIndex(points_.size(), -1);
+    std::vector<int> pointIds;
+    for (int k = firstKeyframe; k < nk; ++k) {
+        for (int id : keyframes_[k].pointIds) {
+            if (id >= 0 && !points_[id].bad && pointIndex[id] < 0) {
+                pointIndex[id] = static_cast<int>(pointIds.size());
+                pointIds.push_back(id);
+            }
+        }
+    }
+    if (pointIds.empty()) return {};
+
+    // Cameras: the adjusted keyframes plus fixed ones that also see those points.
+    BAProblem problem;
+    std::vector<int> cameraKeyframe;
+    struct ObsRef {
+        int keyframe, keypoint;
+    };
+    std::vector<ObsRef> obsRef;
+    for (int k = 0; k < nk; ++k) {
+        const bool variable = k >= firstKeyframe;
+        const Keyframe& kf = keyframes_[k];
+        const int camera = static_cast<int>(cameraKeyframe.size());
+        bool used = false;
+        for (std::size_t i = 0; i < kf.pointIds.size(); ++i) {
+            const int id = kf.pointIds[i];
+            if (id < 0 || points_[id].bad || pointIndex[id] < 0) continue;
+            problem.observations.push_back(
+                {camera, pointIndex[id], intrinsics_.normalize(kf.keypoints[i].x, kf.keypoints[i].y)});
+            obsRef.push_back({k, static_cast<int>(i)});
+            used = true;
+        }
+        if (!used) continue;
+        cameraKeyframe.push_back(k);
+        problem.poses.push_back(kf.pose);
+        problem.fixedPose.push_back(variable ? 0 : 1);
+    }
+    // Gauge: monocular maps are defined up to position, rotation and scale.
+    // Without fixed neighbours, fix the two oldest keyframes.
+    if (std::count(problem.fixedPose.begin(), problem.fixedPose.end(), 1) == 0) {
+        for (std::size_t c = 0; c < problem.fixedPose.size() && c < 2; ++c) problem.fixedPose[c] = 1;
+    }
+    for (int id : pointIds) problem.points.push_back(points_[id].position);
+
+    BAParams params;
+    params.maxIterations = iterations;
+    params.outlierThresholdPx = options_.mapping.maxReprojectionErrorPx + 0.5;
+    const BAReport report = bundleAdjust(problem, intrinsics_.fx, params, pool_.get());
+    if (!report.ok) return report;
+
+    for (std::size_t c = 0; c < cameraKeyframe.size(); ++c) {
+        if (!problem.fixedPose[c]) keyframes_[cameraKeyframe[c]].pose = problem.poses[c];
+    }
+    for (std::size_t j = 0; j < pointIds.size(); ++j) points_[pointIds[j]].position = problem.points[j];
+    for (std::size_t o = 0; o < obsRef.size(); ++o) {
+        if (report.inlier[o]) continue;
+        Keyframe& kf = keyframes_[obsRef[o].keyframe];
+        const int id = kf.pointIds[obsRef[o].keypoint];
+        kf.pointIds[obsRef[o].keypoint] = -1;
+        if (--points_[id].observations < 2) points_[id].bad = true;
+    }
+    return report;
+}
+
+void Reconstructor::finish() {
+    const int iterations = options_.mapping.globalBAIterations;
+    if (iterations <= 0 || keyframes_.size() < 2) return;
+    auto t = profiler_.scope("global ba");
+    stats_.globalBA = adjust(0, iterations);
+    stats_.globalBACameras = static_cast<int>(keyframes_.size());
+    stats_.globalBAPoints = static_cast<int>(std::count_if(points_.begin(), points_.end(),
+                                                           [](const MapPoint& p) { return !p.bad; }));
 }
 
 int Reconstructor::triangulateBetween(Keyframe& older, Keyframe& newer) {
@@ -511,6 +604,7 @@ PointCloud Reconstructor::pointCloud() const {
     PointCloud cloud;
     cloud.points.reserve(src.size());
     for (const MapPoint& p : src) {
+        if (p.bad) continue;
         Point q;
         q.x = static_cast<float>(p.position.x);
         q.y = static_cast<float>(p.position.y);

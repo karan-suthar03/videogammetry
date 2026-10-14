@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "videogammetry/features.h"
+#include "videogammetry/bundle_adjustment.h"
 #include "videogammetry/frame.h"
 #include "videogammetry/image.h"
 #include "videogammetry/map.h"
@@ -54,6 +55,11 @@ public:
         int maps = 0;            // maps started (> 1 means tracking was lost for good)
         int wideSearches = 0;    // frames that needed the wider projection search
         int keyframeSearches = 0;// frames that needed full matching against the last keyframe
+        int localBAs = 0;
+        double localBARmsBefore = 0, localBARmsAfter = 0;  // mean RMS reprojection error (px)
+        int localBAOutliers = 0;                           // observations removed
+        BAReport globalBA;                                 // set by finish()
+        int globalBACameras = 0, globalBAPoints = 0;
     };
 
     Reconstructor() : Reconstructor(Options{}) {}
@@ -64,6 +70,8 @@ public:
     // Same with features computed elsewhere (e.g. FeaturePipeline, which
     // extracts many frames in parallel). Frames must arrive in order.
     void addFeatures(FrameFeatures&& features);
+    // Call after the last frame: global bundle adjustment over the whole map.
+    void finish();
 
     State state() const { return state_; }
     const Stats& stats() const { return stats_; }
@@ -112,6 +120,10 @@ private:
     std::vector<int> localPoints() const;
     int triangulateBetween(Keyframe& older, Keyframe& newer);
     double medianSceneDepth(const Keyframe& kf) const;
+    // Bundle-adjusts keyframes [first, end) with all their points; keyframes
+    // outside that also see those points are held fixed. Applies the result
+    // and removes rejected observations.
+    BAReport adjust(int firstKeyframe, int iterations);
     void startNewMap();
 
     Options options_;
