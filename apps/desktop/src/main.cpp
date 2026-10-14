@@ -5,8 +5,15 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 #include "frame_prefetcher.h"
 #include "image_io.h"
@@ -31,6 +38,19 @@ void printUsage() {
         "                              and <dir>/map.bmp (top and side view of the result)\n"
         "  --dump-every <n>            frame interval for --dump (default 25)\n"
         "  --save-frame <n> <file>     write decoded frame n (0-based) as .bmp or .ppm\n");
+}
+
+// Windows 11 may treat a console process without a focused window as
+// background work and apply "EcoQoS" power throttling: lower clocks and
+// efficiency cores. Opt out, since this is a throughput-bound job.
+void disablePowerThrottling() {
+#ifdef _WIN32
+    PROCESS_POWER_THROTTLING_STATE state{};
+    state.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+    state.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
+    state.StateMask = 0;  // execution speed throttling off
+    SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &state, sizeof(state));
+#endif
 }
 
 bool ensureDir(const std::filesystem::path& dir) {
@@ -109,6 +129,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    disablePowerThrottling();
+
     VideoReader reader;
     std::string error;
     if (!reader.open(input, error)) {
@@ -144,6 +166,13 @@ int main(int argc, char** argv) {
     long long totalFeatures = 0, totalTracked = 0;
     long initializedAt = -1;
 
+    // Per-frame log for diagnosing tracking: written with --dump.
+    std::ofstream frameLog;
+    if (!dumpDir.empty()) {
+        frameLog.open(std::filesystem::path(dumpDir) / "frames.csv");
+        frameLog << "frame,time,state,tracked,keyframe,keyframes,map_points,cx,cy,cz,orb_ms,track_ms,mapping_ms\n";
+    }
+
     using Clock = std::chrono::steady_clock;
     const auto start = Clock::now();
     FramePrefetcher frames(reader);
@@ -160,10 +189,31 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Per-stage time of this frame = growth of each stage's total.
+        const auto stageTotal = [&](const char* name) {
+            for (const vg::Profiler::Stage& s : reconstructor.profiler().stages()) {
+                if (s.name == name) return s.totalMs;
+            }
+            return 0.0;
+        };
+        const double orbBefore = stageTotal("orb"), trackBefore = stageTotal("track"),
+                     mappingBefore = stageTotal("mapping");
         reconstructor.addFrame(frame);
+        const double orbMs = stageTotal("orb") - orbBefore, trackMs = stageTotal("track") - trackBefore,
+                     mappingMs = stageTotal("mapping") - mappingBefore;
         totalFeatures += static_cast<long long>(reconstructor.lastKeypoints().size());
         totalTracked += reconstructor.lastTrackedCount();
         if (initializedAt < 0 && reconstructor.state() == vg::Reconstructor::State::Tracking) initializedAt = index;
+
+        if (frameLog.is_open()) {
+            const vg::Vec3 c = reconstructor.lastPose().center();
+            char line[256];
+            std::snprintf(line, sizeof(line), "%ld,%.3f,%s,%d,%d,%zu,%zu,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f\n", index,
+                          frame.timestamp, stateName(reconstructor.state()), reconstructor.lastTrackedCount(),
+                          reconstructor.lastWasKeyframe() ? 1 : 0, reconstructor.keyframes().size(),
+                          reconstructor.mapPoints().size(), c.x, c.y, c.z, orbMs, trackMs, mappingMs);
+            frameLog << line;
+        }
 
         if (!dumpDir.empty() && index % dumpEvery == 0) {
             const RgbImage img = drawTracking(frame, reconstructor.lastKeypoints(), reconstructor.lastTrackedPoints(),
@@ -175,6 +225,7 @@ int main(int argc, char** argv) {
         ++index;
     }
     const double seconds = std::chrono::duration<double>(Clock::now() - start).count();
+    frameLog.close();
 
     if (!frames.error().empty()) {
         std::fprintf(stderr, "error: %s (after %ld frames)\n", frames.error().c_str(), index);
