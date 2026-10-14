@@ -106,6 +106,7 @@ private:
                        Pose& pose);
     std::vector<int> localPoints() const;
     int triangulateBetween(Keyframe& older, Keyframe& newer);
+    double medianSceneDepth(const Keyframe& kf) const;
     void startNewMap();
     void sampleColors(const FrameView& frame, FrameData& data) const;
 

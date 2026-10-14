@@ -422,11 +422,32 @@ void Reconstructor::addKeyframe(const FrameView& frame) {
     lastKeyframeFrame_ = static_cast<long>(frameCount_);
     lastWasKeyframe_ = true;
 
+    // Triangulation partners: the most recent keyframes whose baseline relative
+    // to the scene depth gives enough parallax (newest first, as collected).
+    const MappingParams& mp = options_.mapping;
     const int n = static_cast<int>(keyframes_.size());
-    for (int k = 1; k <= options_.mapping.triangulationKeyframes && n - 1 - k >= 0; ++k) {
-        triangulateBetween(keyframes_[n - 1 - k], keyframes_[n - 1]);
+    const Keyframe& newest = keyframes_[n - 1];
+    const double depth = medianSceneDepth(newest);
+    std::vector<std::pair<double, int>> partners;  // (baseline ratio, keyframe index)
+    for (int k = n - 2; k >= 0 && k >= n - 1 - mp.triangulationSearch; --k) {
+        const double baseline = norm(keyframes_[k].pose.center() - newest.pose.center());
+        const double ratio = depth > 0 ? baseline / depth : 0.0;
+        if (ratio >= mp.minBaselineRatio) partners.push_back({ratio, k});
     }
+    // Most recent qualifying keyframes first: enough parallax, most shared view.
+    if (static_cast<int>(partners.size()) > mp.triangulationKeyframes) partners.resize(mp.triangulationKeyframes);
+    for (const auto& [ratio, k] : partners) triangulateBetween(keyframes_[k], keyframes_[n - 1]);
     trackedPoints_ = keyframes_.back().pointIds;
+}
+
+double Reconstructor::medianSceneDepth(const Keyframe& kf) const {
+    std::vector<double> depths;
+    for (int id : kf.pointIds) {
+        if (id < 0) continue;
+        const double z = kf.pose.transform(points_[id].position).z;
+        if (z > 0) depths.push_back(z);
+    }
+    return medianOf(std::move(depths));
 }
 
 int Reconstructor::triangulateBetween(Keyframe& older, Keyframe& newer) {

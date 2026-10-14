@@ -33,7 +33,7 @@ struct MappingParams {
     int maxReferenceAge = 60;  // frames before the initialization reference is replaced
 
     // Tracking against the map (any motion: uses 2D-3D matches, no parallax needed).
-    int localKeyframes = 10;         // map points of this many recent keyframes are projected
+    int localKeyframes = 20;         // map points of this many recent keyframes are projected
     float projectionRadiusPx = 15;   // search radius around projected map points
     float wideRadiusPx = 60;         // retry radius when few matches (fast motion)
     int minTrackedPoints = 30;
@@ -47,7 +47,13 @@ struct MappingParams {
     // Triangulation of new points between keyframes.
     double minTriangulationAngleDeg = 1.0;
     double maxReprojectionErrorPx = 2.0;
-    int triangulationKeyframes = 2;  // previous keyframes to triangulate against
+    // New points are triangulated against earlier keyframes with enough
+    // baseline: among the last `triangulationSearch` keyframes, up to
+    // `triangulationKeyframes` most recent ones whose baseline / median scene
+    // depth is at least `minBaselineRatio` (enough parallax, most shared view).
+    int triangulationKeyframes = 4;
+    int triangulationSearch = 15;
+    double minBaselineRatio = 0.02;
 };
 
 }  // namespace vg
