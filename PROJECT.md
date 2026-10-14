@@ -65,8 +65,10 @@ CMakePresets.json      presets: windows (MSVC), linux (Ninja)
 ```
 
 - The core never decodes video or touches OS APIs; each app decodes frames its own way and passes `vg::FrameView`s in.
-- Build Windows: `cmake --preset windows && cmake --build --preset windows-release`
-- Build Linux: `cmake --preset linux && cmake --build --preset linux-release` (needs `g++`/`clang++`, `cmake`, `ninja`)
+- Desktop decodes video with FFmpeg (`apps/desktop/src/video_reader.*`, LGPL shared build, dynamically linked).
+- Build Windows: `powershell -ExecutionPolicy Bypass -File scripts/fetch_ffmpeg_windows.ps1` (once, downloads FFmpeg 8.1 into `third_party/`), then `cmake --preset windows && cmake --build --preset windows-release`
+- Run: `build/windows/apps/desktop/Release/videogammetry.exe sample_video/street_walk_10s.mp4 -o cloud.ply [--save-frame <n> frame.ppm]`
+- Build Linux: `cmake --preset linux && cmake --build --preset linux-release` (needs `g++`/`clang++`, `cmake`, `ninja`, `pkg-config`, FFmpeg dev packages; untested)
 - Build Android: open `apps/android` in Android Studio (needs NDK + CMake from SDK Manager)
 
 ## 7. Interface
