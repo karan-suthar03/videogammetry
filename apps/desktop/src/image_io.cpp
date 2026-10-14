@@ -115,3 +115,116 @@ std::vector<std::uint8_t> drawKeypoints(const vg::FrameView& frame,
     }
     return rgb;
 }
+
+RgbImage resizeRgb(const vg::FrameView& frame, int width, int height) {
+    RgbImage out;
+    out.width = width;
+    out.height = height;
+    out.pixels.resize(static_cast<std::size_t>(width) * height * 3);
+    const float sx = static_cast<float>(frame.width) / width;
+    const float sy = static_cast<float>(frame.height) / height;
+
+    for (int y = 0; y < height; ++y) {
+        const float fy = std::clamp((y + 0.5f) * sy - 0.5f, 0.0f, static_cast<float>(frame.height - 1));
+        const int y0 = static_cast<int>(fy);
+        const int y1 = std::min(y0 + 1, frame.height - 1);
+        const float wy = fy - y0;
+        const std::uint8_t* r0 = frame.data + static_cast<std::size_t>(y0) * frame.stride;
+        const std::uint8_t* r1 = frame.data + static_cast<std::size_t>(y1) * frame.stride;
+        std::uint8_t* dst = out.pixels.data() + static_cast<std::size_t>(y) * width * 3;
+        for (int x = 0; x < width; ++x) {
+            const float fx = std::clamp((x + 0.5f) * sx - 0.5f, 0.0f, static_cast<float>(frame.width - 1));
+            const int x0 = static_cast<int>(fx);
+            const int x1 = std::min(x0 + 1, frame.width - 1);
+            const float wx = fx - x0;
+            for (int c = 0; c < 3; ++c) {
+                const float top = r0[x0 * 3 + c] * (1 - wx) + r0[x1 * 3 + c] * wx;
+                const float bot = r1[x0 * 3 + c] * (1 - wx) + r1[x1 * 3 + c] * wx;
+                dst[x * 3 + c] = static_cast<std::uint8_t>(top * (1 - wy) + bot * wy + 0.5f);
+            }
+        }
+    }
+    return out;
+}
+
+RgbImage drawMatches(const RgbImage& top, const std::vector<vg::Keypoint>& topKeypoints,
+                     const RgbImage& bottom, const std::vector<vg::Keypoint>& bottomKeypoints,
+                     const std::vector<vg::Match>& matches, int maxDistance) {
+    RgbImage out;
+    out.width = std::max(top.width, bottom.width);
+    out.height = top.height + bottom.height;
+    out.pixels.assign(static_cast<std::size_t>(out.width) * out.height * 3, 0);
+
+    // Copy both images, darkened so the lines stand out.
+    const auto blit = [&](const RgbImage& img, int yOffset) {
+        for (int y = 0; y < img.height; ++y) {
+            const std::uint8_t* src = img.pixels.data() + static_cast<std::size_t>(y) * img.width * 3;
+            std::uint8_t* dst = out.pixels.data() + static_cast<std::size_t>(y + yOffset) * out.width * 3;
+            for (int i = 0; i < img.width * 3; ++i) dst[i] = static_cast<std::uint8_t>(src[i] * 6 / 10);
+        }
+    };
+    blit(top, 0);
+    blit(bottom, top.height);
+
+    const auto plot = [&](int x, int y, const std::uint8_t* c) {
+        if (x < 0 || y < 0 || x >= out.width || y >= out.height) return;
+        std::uint8_t* p = out.pixels.data() + (static_cast<std::size_t>(y) * out.width + x) * 3;
+        p[0] = c[0];
+        p[1] = c[1];
+        p[2] = c[2];
+    };
+    const auto line = [&](float x0, float y0, float x1, float y1, const std::uint8_t* c) {
+        const int steps = static_cast<int>(std::max(std::abs(x1 - x0), std::abs(y1 - y0))) + 1;
+        for (int i = 0; i <= steps; ++i) {
+            const float t = static_cast<float>(i) / steps;
+            plot(static_cast<int>(std::lround(x0 + (x1 - x0) * t)), static_cast<int>(std::lround(y0 + (y1 - y0) * t)), c);
+        }
+    };
+    const auto dot = [&](float x, float y, const std::uint8_t* c) {
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) plot(static_cast<int>(std::lround(x)) + dx, static_cast<int>(std::lround(y)) + dy, c);
+        }
+    };
+
+    for (const vg::Match& m : matches) {
+        const vg::Keypoint& a = topKeypoints[m.train];
+        const vg::Keypoint& b = bottomKeypoints[m.query];
+        const float t = std::clamp(static_cast<float>(m.distance) / std::max(maxDistance, 1), 0.0f, 1.0f);
+        const std::uint8_t color[3] = {static_cast<std::uint8_t>(255 * t), static_cast<std::uint8_t>(255 * (1 - t)), 40};
+        line(a.x, a.y, b.x, b.y + top.height, color);
+        dot(a.x, a.y, color);
+        dot(b.x, b.y + top.height, color);
+    }
+    return out;
+}
+
+RgbImage drawFlow(const RgbImage& image, const std::vector<vg::Keypoint>& trainKeypoints,
+                  const std::vector<vg::Keypoint>& queryKeypoints,
+                  const std::vector<vg::Match>& matches, int maxDistance) {
+    RgbImage out = image;
+    for (auto& p : out.pixels) p = static_cast<std::uint8_t>(p * 6 / 10);
+
+    const auto plot = [&](int x, int y, const std::uint8_t* c) {
+        if (x < 0 || y < 0 || x >= out.width || y >= out.height) return;
+        std::uint8_t* p = out.pixels.data() + (static_cast<std::size_t>(y) * out.width + x) * 3;
+        p[0] = c[0];
+        p[1] = c[1];
+        p[2] = c[2];
+    };
+
+    for (const vg::Match& m : matches) {
+        const vg::Keypoint& a = trainKeypoints[m.train];
+        const vg::Keypoint& b = queryKeypoints[m.query];
+        const float t = std::clamp(static_cast<float>(m.distance) / std::max(maxDistance, 1), 0.0f, 1.0f);
+        const std::uint8_t color[3] = {static_cast<std::uint8_t>(255 * t), static_cast<std::uint8_t>(255 * (1 - t)), 40};
+        const int steps = static_cast<int>(std::max(std::abs(b.x - a.x), std::abs(b.y - a.y))) + 1;
+        for (int i = 0; i <= steps; ++i) {
+            const float s = static_cast<float>(i) / steps;
+            plot(static_cast<int>(std::lround(a.x + (b.x - a.x) * s)), static_cast<int>(std::lround(a.y + (b.y - a.y) * s)), color);
+        }
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) plot(static_cast<int>(std::lround(b.x)) + dx, static_cast<int>(std::lround(b.y)) + dy, color);
+        }
+    }
+    return out;
+}

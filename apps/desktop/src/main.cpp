@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -25,10 +26,27 @@ void printUsage() {
         "  -o <file.ply>               output point cloud (default: cloud.ply)\n"
         "  --width <px>                processing width, 0 = full resolution (default 960)\n"
         "  --threads <n>               worker threads, 0 = all hardware threads (default 0)\n"
-        "  --save-frame <n> <file>     write decoded frame n (0-based) as .bmp or .ppm\n"
-        "  --save-features <n> <file>  write frame n with its ORB keypoints drawn (.bmp or .ppm)\n"
-        "  --dump-features <dir>       write keypoint images into <dir> every --dump-every frames\n"
-        "  --dump-every <n>            frame interval for --dump-features (default 25)\n");
+        "  --match-gap <n>             match frame t against frame t-n (default 1)\n"
+        "  --search-radius <px>        match search radius in processed pixels, 0 = everywhere (default 100)\n"
+        "  --dump <dir>                write debug images to <dir>/features and <dir>/matches\n"
+        "  --dump-every <n>            frame interval for --dump (default 25)\n"
+        "  --save-frame <n> <file>     write decoded frame n (0-based) as .bmp or .ppm\n");
+}
+
+bool ensureDir(const std::filesystem::path& dir) {
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec) {
+        std::fprintf(stderr, "error: cannot create %s: %s\n", dir.string().c_str(), ec.message().c_str());
+        return false;
+    }
+    return true;
+}
+
+std::string numbered(const std::filesystem::path& dir, const char* prefix, long index) {
+    char name[64];
+    std::snprintf(name, sizeof(name), "%s_%05ld.bmp", prefix, index);
+    return (dir / name).string();
 }
 
 }  // namespace
@@ -38,8 +56,6 @@ int main(int argc, char** argv) {
     std::string output = "cloud.ply";
     long saveFrameIndex = -1;
     std::string saveFramePath;
-    long saveFeaturesIndex = -1;
-    std::string saveFeaturesPath;
     vg::Reconstructor::Options options;
     std::string dumpDir;
     long dumpEvery = 25;
@@ -59,16 +75,17 @@ int main(int argc, char** argv) {
             options.processWidth = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--threads") == 0 && i + 1 < argc) {
             options.threads = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
-        } else if (std::strcmp(argv[i], "--save-frame") == 0 && i + 2 < argc) {
-            saveFrameIndex = std::strtol(argv[++i], nullptr, 10);
-            saveFramePath = argv[++i];
-        } else if (std::strcmp(argv[i], "--save-features") == 0 && i + 2 < argc) {
-            saveFeaturesIndex = std::strtol(argv[++i], nullptr, 10);
-            saveFeaturesPath = argv[++i];
-        } else if (std::strcmp(argv[i], "--dump-features") == 0 && i + 1 < argc) {
+        } else if (std::strcmp(argv[i], "--match-gap") == 0 && i + 1 < argc) {
+            options.matchGap = std::max(1, static_cast<int>(std::strtol(argv[++i], nullptr, 10)));
+        } else if (std::strcmp(argv[i], "--search-radius") == 0 && i + 1 < argc) {
+            options.match.searchRadius = std::strtof(argv[++i], nullptr);
+        } else if (std::strcmp(argv[i], "--dump") == 0 && i + 1 < argc) {
             dumpDir = argv[++i];
         } else if (std::strcmp(argv[i], "--dump-every") == 0 && i + 1 < argc) {
             dumpEvery = std::max(1L, std::strtol(argv[++i], nullptr, 10));
+        } else if (std::strcmp(argv[i], "--save-frame") == 0 && i + 2 < argc) {
+            saveFrameIndex = std::strtol(argv[++i], nullptr, 10);
+            saveFramePath = argv[++i];
         } else if (input.empty()) {
             input = argv[i];
         } else {
@@ -99,21 +116,21 @@ int main(int argc, char** argv) {
     std::printf("\n");
 
     const bool downscaled = options.processWidth > 0 && info.width > options.processWidth;
-    std::printf("process: %d px wide%s\n", downscaled ? options.processWidth : info.width,
-                downscaled ? " (downscaled)" : " (full resolution)");
+    std::printf("process: %d px wide%s, matching frame t vs t-%d within %.0f px\n",
+                downscaled ? options.processWidth : info.width,
+                downscaled ? " (downscaled)" : " (full resolution)",
+                options.matchGap, options.match.searchRadius);
 
-    if (!dumpDir.empty()) {
-        std::error_code ec;
-        std::filesystem::create_directories(dumpDir, ec);
-        if (ec) {
-            std::fprintf(stderr, "error: cannot create %s: %s\n", dumpDir.c_str(), ec.message().c_str());
-            return 1;
-        }
-    }
+    const std::filesystem::path featuresDir = std::filesystem::path(dumpDir) / "features";
+    const std::filesystem::path matchesDir = std::filesystem::path(dumpDir) / "matches";
+    if (!dumpDir.empty() && (!ensureDir(featuresDir) || !ensureDir(matchesDir))) return 1;
 
     vg::Reconstructor reconstructor(options);
     std::printf("threads: %d of %d hardware threads (+ background decode)\n",
                 reconstructor.threadCount(), vg::ThreadPool::hardwareThreads());
+
+    // Processed-size RGB copies of the last matchGap + 1 frames, for match images.
+    std::deque<RgbImage> recentRgb;
 
     long dumped = 0;
     vg::FrameView frame;
@@ -121,6 +138,9 @@ int main(int argc, char** argv) {
     double lastTimestamp = 0.0;
     double decodeWaitMs = 0.0;
     long long totalFeatures = 0;
+    long matchedFrames = 0;
+    long long sumCandidates = 0, sumDistance = 0, sumCross = 0, sumFinal = 0;
+    int minMatches = -1;
 
     using Clock = std::chrono::steady_clock;
     const auto start = Clock::now();
@@ -141,29 +161,39 @@ int main(int argc, char** argv) {
         reconstructor.addFrame(frame);
         totalFeatures += static_cast<long long>(reconstructor.lastKeypoints().size());
 
-        const bool dumpThis = !dumpDir.empty() && index % dumpEvery == 0;
-        if (index == saveFeaturesIndex || dumpThis) {
-            std::vector<std::uint8_t> drawn =
-                drawKeypoints(frame, reconstructor.lastKeypoints(), reconstructor.processScale());
-            vg::FrameView view = frame;
-            view.data = drawn.data();
-            view.stride = frame.width * 3;
-            if (index == saveFeaturesIndex) {
-                if (writeImage(view, saveFeaturesPath)) {
-                    std::printf("saved %zu keypoints on frame %ld to %s\n",
-                                reconstructor.lastKeypoints().size(), index, saveFeaturesPath.c_str());
-                } else {
-                    std::fprintf(stderr, "warning: could not write %s\n", saveFeaturesPath.c_str());
-                }
-            }
-            if (dumpThis) {
-                char name[64];
-                std::snprintf(name, sizeof(name), "features_%05ld.bmp", index);
-                const std::string path = (std::filesystem::path(dumpDir) / name).string();
-                if (writeImage(view, path)) {
-                    ++dumped;
-                } else {
-                    std::fprintf(stderr, "warning: could not write %s\n", path.c_str());
+        const auto& matches = reconstructor.lastMatches();
+        const vg::MatchStats& ms = reconstructor.lastMatchStats();
+        if (ms.candidates > 0) {
+            ++matchedFrames;
+            sumCandidates += ms.candidates;
+            sumDistance += ms.afterDistance;
+            sumCross += ms.afterCrossCheck;
+            sumFinal += ms.afterOrientation;
+            if (minMatches < 0 || ms.afterOrientation < minMatches) minMatches = ms.afterOrientation;
+        }
+
+        if (!dumpDir.empty()) {
+            const float s = reconstructor.processScale();
+            recentRgb.push_back(resizeRgb(frame, static_cast<int>(std::lround(frame.width / s)),
+                                          static_cast<int>(std::lround(frame.height / s))));
+            if (recentRgb.size() > static_cast<std::size_t>(options.matchGap) + 1) recentRgb.pop_front();
+
+            if (index % dumpEvery == 0) {
+                std::vector<std::uint8_t> drawn = drawKeypoints(frame, reconstructor.lastKeypoints(), s);
+                vg::FrameView view = frame;
+                view.data = drawn.data();
+                view.stride = frame.width * 3;
+                if (writeImage(view, numbered(featuresDir, "features", index))) ++dumped;
+
+                if (!matches.empty() && recentRgb.size() == static_cast<std::size_t>(options.matchGap) + 1) {
+                    const RgbImage img = drawMatches(recentRgb.front(), reconstructor.matchedFrameKeypoints(),
+                                                     recentRgb.back(), reconstructor.lastKeypoints(), matches,
+                                                     options.match.maxDistance);
+                    if (writeImage(img.view(), numbered(matchesDir, "matches", index))) ++dumped;
+                    const RgbImage flow = drawFlow(recentRgb.back(), reconstructor.matchedFrameKeypoints(),
+                                                   reconstructor.lastKeypoints(), matches,
+                                                   options.match.maxDistance);
+                    if (writeImage(flow.view(), numbered(matchesDir, "flow", index))) ++dumped;
                 }
             }
         }
@@ -178,9 +208,15 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (dumped) std::printf("dumped:  %ld keypoint images to %s\n", dumped, dumpDir.c_str());
+    if (dumped) std::printf("dumped:  %ld images to %s\n", dumped, dumpDir.c_str());
     std::printf("frames:  %ld (last t=%.3f s), %.0f ORB features/frame avg\n",
                 index, lastTimestamp, index ? double(totalFeatures) / index : 0.0);
+    if (matchedFrames > 0) {
+        const double n = static_cast<double>(matchedFrames);
+        std::printf("matches: %.0f/frame avg (min %d) | funnel per frame: %.0f with candidates -> "
+                    "%.0f distance+ratio -> %.0f cross-check -> %.0f orientation\n",
+                    sumFinal / n, minMatches, sumCandidates / n, sumDistance / n, sumCross / n, sumFinal / n);
+    }
 
     std::printf("\n  %-10s %10s %10s %10s\n", "stage", "total ms", "avg ms", "max ms");
     // Decoding runs on its own thread; this is only the time spent waiting for it.

@@ -7,6 +7,7 @@ set(VG_CORE_VERSION 0.1.0)
 add_library(videogammetry_core STATIC
     src/version.cpp
     src/image.cpp
+    src/matcher.cpp
     src/orb.cpp
     src/point_cloud.cpp
     src/profiler.cpp

@@ -1,5 +1,6 @@
 #include "videogammetry/reconstructor.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace vg {
@@ -35,12 +36,30 @@ void Reconstructor::addFrame(const FrameView& frame) {
         input = &processed_;
     }
 
+    // Reuse the oldest history slot's buffers for the new frame.
+    const std::size_t keep = static_cast<std::size_t>(std::max(options_.matchGap, 1)) + 1;
+    FrameFeatures current;
+    if (history_.size() >= keep) {
+        current = std::move(history_.front());
+        history_.pop_front();
+    }
     {
         auto t = profiler_.scope("orb");
-        orb_.extract(*input, keypoints_, descriptors_);
+        orb_.extract(*input, current.keypoints, current.descriptors);
+    }
+    history_.push_back(std::move(current));
+
+    matches_.clear();
+    matchStats_ = {};
+    if (history_.size() == keep) {
+        auto t = profiler_.scope("match");
+        const FrameFeatures& query = history_.back();
+        const FrameFeatures& train = history_.front();
+        matchFeatures(query.keypoints, query.descriptors, train.keypoints, train.descriptors,
+                      options_.match, matches_, &matchStats_, pool_.get());
     }
 
-    // TODO(phase 1): matching, pose estimation, triangulation.
+    // TODO(phase 1): pose estimation, triangulation.
     ++frameCount_;
 }
 

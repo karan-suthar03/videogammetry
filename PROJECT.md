@@ -73,7 +73,7 @@ CMakePresets.json      presets: windows (MSVC), linux (Ninja)
 - Build Linux: `cmake --preset linux && cmake --build --preset linux-release` (needs `g++`/`clang++`, `cmake`, `ninja`, `pkg-config`, FFmpeg dev packages; untested)
 - Build Android: open `apps/android` in Android Studio (needs NDK + CMake from SDK Manager)
 - Tests: `ctest --test-dir build/windows -C Release`
-- Visual output: `videogammetry.exe sample_video/street_walk_10s.mp4 -o test_output/cloud.ply --dump-features test_output/features` writes keypoint images (`.bmp`) into `test_output/` (git-ignored)
+- Visual output: `videogammetry.exe sample_video/street_walk_10s.mp4 -o test_output/cloud.ply --dump test_output [--match-gap 10]` writes `features/` (keypoints) and `matches/` (stacked `matches_*` and `flow_*`) images (`.bmp`) into `test_output/` (git-ignored)
 - ORB descriptor pattern: learned offline by `tools/train_orb_pattern` into `core/src/orb_pattern.inc` (committed); retrain when more varied footage is available
 
 ## 7. Interface
