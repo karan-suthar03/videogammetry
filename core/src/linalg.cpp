@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <numeric>
+#include <vector>
 
 namespace vg {
 
@@ -89,6 +90,50 @@ void svd3(const Mat3& a, Mat3& u, Vec3& s, Mat3& v) {
     u.setColumn(0, u0);
     u.setColumn(1, u1);
     u.setColumn(2, u2);
+}
+
+}  // namespace vg
+
+namespace vg {
+
+Mat3 nearestRotation(const Mat3& m) {
+    Mat3 u, v;
+    Vec3 s;
+    svd3(m, u, s, v);
+    Mat3 r = u * v.transposed();
+    if (r.determinant() < 0) {
+        u.setColumn(2, -u.column(2));
+        r = u * v.transposed();
+    }
+    return r;
+}
+
+bool solveSpd(const double* a, const double* b, int n, double* x) {
+    std::vector<double> l(static_cast<std::size_t>(n) * n, 0.0);
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j <= i; ++j) {
+            double sum = a[i * n + j];
+            for (int k = 0; k < j; ++k) sum -= l[i * n + k] * l[j * n + k];
+            if (i == j) {
+                if (sum <= 0) return false;
+                l[i * n + i] = std::sqrt(sum);
+            } else {
+                l[i * n + j] = sum / l[j * n + j];
+            }
+        }
+    }
+    std::vector<double> y(static_cast<std::size_t>(n));
+    for (int i = 0; i < n; ++i) {  // L y = b
+        double sum = b[i];
+        for (int k = 0; k < i; ++k) sum -= l[i * n + k] * y[k];
+        y[i] = sum / l[i * n + i];
+    }
+    for (int i = n - 1; i >= 0; --i) {  // L^T x = y
+        double sum = y[i];
+        for (int k = i + 1; k < n; ++k) sum -= l[k * n + i] * x[k];
+        x[i] = sum / l[i * n + i];
+    }
+    return true;
 }
 
 }  // namespace vg

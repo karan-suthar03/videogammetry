@@ -84,11 +84,40 @@ inline Mat3 skew(const Vec3& v) {
     return r;
 }
 
+// Rotation matrix from an axis-angle vector (Rodrigues): exp of so(3).
+inline Mat3 rotationFromAxisAngle(const Vec3& w) {
+    const double theta = norm(w);
+    const Mat3 K = skew(w);
+    Mat3 R = Mat3::identity();
+    if (theta < 1e-10) {
+        for (int i = 0; i < 9; ++i) R.m[i] += K.m[i];  // first order
+        return R;
+    }
+    const double a = std::sin(theta) / theta;
+    const double b = (1 - std::cos(theta)) / (theta * theta);
+    const Mat3 K2 = K * K;
+    for (int i = 0; i < 9; ++i) R.m[i] += a * K.m[i] + b * K2.m[i];
+    return R;
+}
+
 // Rotation angle of a rotation matrix, in radians [0, pi].
 inline double rotationAngle(const Mat3& R) {
     const double c = (R(0, 0) + R(1, 1) + R(2, 2) - 1.0) * 0.5;
     return std::acos(c > 1 ? 1 : (c < -1 ? -1 : c));
 }
+
+// Rigid world-to-camera transform: Xc = R * Xw + t.
+struct Pose {
+    Mat3 R = Mat3::identity();
+    Vec3 t;
+
+    Vec3 transform(const Vec3& world) const { return R * world + t; }
+    // Camera center in world coordinates.
+    Vec3 center() const { return -(R.transposed() * t); }
+    // This pose followed by `next` (next applied after this).
+    Pose then(const Pose& next) const { return {next.R * R, next.R * t + next.t}; }
+    Pose inverse() const { return {R.transposed(), -(R.transposed() * t)}; }
+};
 
 // Eigen decomposition of a symmetric n x n matrix (row-major, n <= 9) by
 // cyclic Jacobi rotations. Eigenvalues are returned in ascending order;
@@ -98,5 +127,12 @@ void symmetricEigen(double* a, int n, double* values, double* vectors);
 // Singular value decomposition of a 3x3 matrix: A = U * diag(s) * V^T with
 // s sorted descending and U, V orthonormal.
 void svd3(const Mat3& a, Mat3& u, Vec3& s, Mat3& v);
+
+// Nearest rotation matrix (orthonormal, det +1) to an arbitrary 3x3 matrix.
+Mat3 nearestRotation(const Mat3& m);
+
+// Solves the symmetric positive-definite system A x = b (n x n, row-major)
+// by Cholesky decomposition. Returns false if A is not positive definite.
+bool solveSpd(const double* a, const double* b, int n, double* x);
 
 }  // namespace vg

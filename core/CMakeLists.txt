@@ -10,6 +10,7 @@ add_library(videogammetry_core STATIC
     src/linalg.cpp
     src/matcher.cpp
     src/orb.cpp
+    src/pnp.cpp
     src/point_cloud.cpp
     src/profiler.cpp
     src/reconstructor.cpp
