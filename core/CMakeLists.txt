@@ -10,6 +10,7 @@ add_library(videogammetry_core STATIC
     src/features.cpp
     src/image.cpp
     src/linalg.cpp
+    src/map_quality.cpp
     src/matcher.cpp
     src/orb.cpp
     src/pnp.cpp
