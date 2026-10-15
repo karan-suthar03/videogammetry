@@ -1,0 +1,1046 @@
+{
+ "commit": "5b983c6",
+ "dirty": true,
+ "label": "speedups",
+ "extra_args": [],
+ "runs": 1,
+ "summary": {
+  "street": {
+   "frames": 708,
+   "lost_frames": 0,
+   "maps": 1,
+   "tracked_per_frame": 360,
+   "keyframes": 202,
+   "points": 13661,
+   "surface_variation": 0.019,
+   "scattered_pct": 9,
+   "two_view_pct": 1,
+   "fov": 70.5,
+   "k1": -0.013,
+   "background_passes": 6,
+   "fps": 67.1,
+   "core_fps": 85.3,
+   "video_fps": 25.0,
+   "wall_s": 12.845865726470947,
+   "reference_fov": 72.34832618433929,
+   "reference_k1": -0.02277664308482745,
+   "final_ate_rms_pct": 0.09498833537100747,
+   "final_ate_rms_pct_range": [
+    0.09498833537100747,
+    0.09498833537100747
+   ],
+   "final_ate_max_pct": 0.2178799939225738,
+   "final_scale_min": 1.001308270625096,
+   "final_scale_max": 1.001308270625096,
+   "final_rpe_direction_deg": 0.33849462253636653,
+   "final_rpe_length_ratio": 1.0027234828201483,
+   "live_ate_rms_pct": 0.34411767056961645,
+   "live_ate_rms_pct_range": [
+    0.34411767056961645,
+    0.34411767056961645
+   ],
+   "live_ate_max_pct": 0.8701997296917905,
+   "live_scale_min": 1.008398303378176,
+   "live_scale_max": 1.008398303378176,
+   "live_rpe_direction_deg": 0.936548639738505,
+   "live_rpe_length_ratio": 1.0037968276129465,
+   "stage_avg_ms": {
+    "decode*": 5.87,
+    "init": 7.77,
+    "track": 1.6,
+    "kf.cull": 0.01,
+    "kf.triangulate": 4.85,
+    "kf.fuse": 7.4,
+    "kf.local ba": 12.19,
+    "mapping": 25.29,
+    "kf.focal ba": 33.54,
+    "global ba": 2068.41,
+    "all": 14.91
+   }
+  },
+  "street_backward": {
+   "frames": 708,
+   "lost_frames": 0,
+   "maps": 1,
+   "tracked_per_frame": 477,
+   "keyframes": 76,
+   "points": 6429,
+   "surface_variation": 0.013,
+   "scattered_pct": 6,
+   "two_view_pct": 4,
+   "fov": 71.2,
+   "k1": -0.014,
+   "background_passes": 7,
+   "fps": 73.7,
+   "core_fps": 211.1,
+   "video_fps": 25.0,
+   "wall_s": 9.910328149795532,
+   "reference_fov": null,
+   "reference_k1": null,
+   "final_ate_rms_pct": null,
+   "final_ate_max_pct": null,
+   "final_scale_min": null,
+   "final_scale_max": null,
+   "final_rpe_direction_deg": null,
+   "final_rpe_length_ratio": null,
+   "live_ate_rms_pct": null,
+   "live_ate_max_pct": null,
+   "live_scale_min": null,
+   "live_scale_max": null,
+   "live_rpe_direction_deg": null,
+   "live_rpe_length_ratio": null,
+   "stage_avg_ms": {
+    "decode*": 8.9,
+    "init": 6.97,
+    "track": 1.98,
+    "kf.cull": 0.01,
+    "kf.triangulate": 3.02,
+    "kf.fuse": 4.56,
+    "kf.local ba": 11.74,
+    "mapping": 19.53,
+    "global ba": 199.22,
+    "all": 13.56
+   }
+  },
+  "street_rotated90": {
+   "frames": 708,
+   "lost_frames": 0,
+   "maps": 1,
+   "tracked_per_frame": 381,
+   "keyframes": 176,
+   "points": 12542,
+   "surface_variation": 0.018,
+   "scattered_pct": 8,
+   "two_view_pct": 2,
+   "fov": 71.7,
+   "k1": -0.016,
+   "background_passes": 6,
+   "fps": 62.3,
+   "core_fps": 80.4,
+   "video_fps": 25.0,
+   "wall_s": 12.502925395965576,
+   "reference_fov": null,
+   "reference_k1": null,
+   "final_ate_rms_pct": null,
+   "final_ate_max_pct": null,
+   "final_scale_min": null,
+   "final_scale_max": null,
+   "final_rpe_direction_deg": null,
+   "final_rpe_length_ratio": null,
+   "live_ate_rms_pct": null,
+   "live_ate_max_pct": null,
+   "live_scale_min": null,
+   "live_scale_max": null,
+   "live_rpe_direction_deg": null,
+   "live_rpe_length_ratio": null,
+   "stage_avg_ms": {
+    "decode*": 4.7,
+    "init": 7.89,
+    "track": 1.8,
+    "kf.cull": 0.01,
+    "kf.triangulate": 5.31,
+    "kf.fuse": 8.15,
+    "kf.local ba": 15.09,
+    "mapping": 37.44,
+    "kf.focal ba": 47.18,
+    "global ba": 965.55,
+    "all": 16.05
+   }
+  },
+  "street_fast4x": {
+   "frames": 177,
+   "lost_frames": 0,
+   "maps": 1,
+   "tracked_per_frame": 317,
+   "keyframes": 85,
+   "points": 7793,
+   "surface_variation": 0.016,
+   "scattered_pct": 7,
+   "two_view_pct": 4,
+   "fov": 71.8,
+   "k1": -0.017,
+   "background_passes": 5,
+   "fps": 59.0,
+   "core_fps": 68.3,
+   "video_fps": 25.0,
+   "wall_s": 3.31256103515625,
+   "reference_fov": null,
+   "reference_k1": null,
+   "final_ate_rms_pct": null,
+   "final_ate_max_pct": null,
+   "final_scale_min": null,
+   "final_scale_max": null,
+   "final_rpe_direction_deg": null,
+   "final_rpe_length_ratio": null,
+   "live_ate_rms_pct": null,
+   "live_ate_max_pct": null,
+   "live_scale_min": null,
+   "live_scale_max": null,
+   "live_rpe_direction_deg": null,
+   "live_rpe_length_ratio": null,
+   "stage_avg_ms": {
+    "decode*": 3.09,
+    "init": 5.47,
+    "track": 1.7,
+    "kf.cull": 0.01,
+    "kf.triangulate": 4.71,
+    "kf.fuse": 5.12,
+    "kf.local ba": 9.67,
+    "mapping": 24.9,
+    "kf.focal ba": 30.92,
+    "global ba": 215.17,
+    "all": 16.94
+   }
+  },
+  "street_mirrored_backward": {
+   "frames": 708,
+   "lost_frames": 0,
+   "maps": 1,
+   "tracked_per_frame": 476,
+   "keyframes": 76,
+   "points": 6570,
+   "surface_variation": 0.014,
+   "scattered_pct": 8,
+   "two_view_pct": 4,
+   "fov": 71.8,
+   "k1": -0.022,
+   "background_passes": 6,
+   "fps": 58.4,
+   "core_fps": 151.4,
+   "video_fps": 25.0,
+   "wall_s": 12.317549228668213,
+   "reference_fov": null,
+   "reference_k1": null,
+   "final_ate_rms_pct": null,
+   "final_ate_max_pct": null,
+   "final_scale_min": null,
+   "final_scale_max": null,
+   "final_rpe_direction_deg": null,
+   "final_rpe_length_ratio": null,
+   "live_ate_rms_pct": null,
+   "live_ate_max_pct": null,
+   "live_scale_min": null,
+   "live_scale_max": null,
+   "live_rpe_direction_deg": null,
+   "live_rpe_length_ratio": null,
+   "stage_avg_ms": {
+    "decode*": 10.44,
+    "init": 7.28,
+    "track": 2.26,
+    "kf.cull": 0.01,
+    "kf.triangulate": 3.97,
+    "kf.fuse": 6.47,
+    "kf.local ba": 13.97,
+    "mapping": 35.96,
+    "kf.focal ba": 69.76,
+    "global ba": 97.03,
+    "all": 17.13
+   }
+  },
+  "family": {
+   "frames": 4393,
+   "lost_frames": 0,
+   "maps": 1,
+   "tracked_per_frame": 371,
+   "keyframes": 731,
+   "points": 42314,
+   "surface_variation": 0.082,
+   "scattered_pct": 39,
+   "two_view_pct": 0,
+   "fov": 79.2,
+   "k1": -0.025,
+   "background_passes": 5,
+   "fps": 51.0,
+   "core_fps": 66.7,
+   "video_fps": 29.97,
+   "wall_s": 103.92318558692932,
+   "reference_fov": 79.20526296012925,
+   "reference_k1": -0.028003659493048512,
+   "final_ate_rms_pct": 0.9401514793426744,
+   "final_ate_rms_pct_range": [
+    0.9401514793426744,
+    0.9401514793426744
+   ],
+   "final_ate_max_pct": 1.5068202517273035,
+   "final_scale_min": 0.9668584716019683,
+   "final_scale_max": 1.012855442770829,
+   "final_rpe_direction_deg": 0.7106031705334366,
+   "final_rpe_length_ratio": 0.9874007126952496,
+   "live_ate_rms_pct": 6.6912285851519595,
+   "live_ate_rms_pct_range": [
+    6.6912285851519595,
+    6.6912285851519595
+   ],
+   "live_ate_max_pct": 11.042696592550486,
+   "live_scale_min": 0.8761221364222829,
+   "live_scale_max": 1.1643319325954298,
+   "live_rpe_direction_deg": 2.35796178255847,
+   "live_rpe_length_ratio": 0.943953389081482,
+   "stage_avg_ms": {
+    "decode*": 8.31,
+    "init": 13.46,
+    "track": 2.53,
+    "kf.cull": 0.01,
+    "kf.triangulate": 6.01,
+    "kf.fuse": 10.99,
+    "kf.local ba": 17.62,
+    "mapping": 49.39,
+    "kf.focal ba": 73.95,
+    "global ba": 17244.45,
+    "all": 19.62
+   }
+  },
+  "m60": {
+   "frames": 2878,
+   "lost_frames": 0,
+   "maps": 1,
+   "tracked_per_frame": 509,
+   "keyframes": 741,
+   "points": 57626,
+   "surface_variation": 0.073,
+   "scattered_pct": 34,
+   "two_view_pct": 0,
+   "fov": 63.2,
+   "k1": -0.117,
+   "background_passes": 11,
+   "fps": 70.1,
+   "core_fps": 78.5,
+   "video_fps": 23.98,
+   "wall_s": 45.43758225440979,
+   "reference_fov": 63.26864736521978,
+   "reference_k1": -0.11940119876477719,
+   "final_ate_rms_pct": 0.4639462168305563,
+   "final_ate_rms_pct_range": [
+    0.4639462168305563,
+    0.4639462168305563
+   ],
+   "final_ate_max_pct": 0.9487633253241846,
+   "final_scale_min": 0.9881022744810382,
+   "final_scale_max": 1.0176126959772644,
+   "final_rpe_direction_deg": 0.5592015541837918,
+   "final_rpe_length_ratio": 0.9957938662124435,
+   "live_ate_rms_pct": 0.4707786279068761,
+   "live_ate_rms_pct_range": [
+    0.4707786279068761,
+    0.4707786279068761
+   ],
+   "live_ate_max_pct": 1.0856533208004828,
+   "live_scale_min": 0.9860413254311922,
+   "live_scale_max": 1.0166598177847297,
+   "live_rpe_direction_deg": 0.636274652960719,
+   "live_rpe_length_ratio": 0.9976789492249757,
+   "stage_avg_ms": {
+    "decode*": 2.61,
+    "init": 11.16,
+    "track": 2.34,
+    "kf.cull": 0.01,
+    "kf.triangulate": 4.8,
+    "kf.fuse": 9.83,
+    "kf.local ba": 19.85,
+    "mapping": 34.8,
+    "kf.focal ba": 16.84,
+    "global ba": 3906.12,
+    "all": 14.26
+   }
+  }
+ },
+ "runs_detail": {
+  "street": [
+   {
+    "frames": 708,
+    "lost_frames": 0,
+    "maps": 1,
+    "tracked_per_frame": 360,
+    "keyframes": 202,
+    "points": 13661,
+    "surface_variation": 0.019,
+    "scattered_pct": 9,
+    "two_view_pct": 1,
+    "fov": 70.5,
+    "k1": -0.013,
+    "background_passes": 6,
+    "fps": 67.1,
+    "core_fps": 85.3,
+    "video_fps": 25.0,
+    "stages_ms": {
+     "decode*": {
+      "total": 4157.2,
+      "avg": 5.87
+     },
+     "init": {
+      "total": 54.4,
+      "avg": 7.77
+     },
+     "track": {
+      "total": 1121.9,
+      "avg": 1.6
+     },
+     "kf.cull": {
+      "total": 1.3,
+      "avg": 0.01
+     },
+     "kf.triangulate": {
+      "total": 969.4,
+      "avg": 4.85
+     },
+     "kf.fuse": {
+      "total": 1480.5,
+      "avg": 7.4
+     },
+     "kf.local ba": {
+      "total": 2438.8,
+      "avg": 12.19
+     },
+     "mapping": {
+      "total": 5058.7,
+      "avg": 25.29
+     },
+     "kf.focal ba": {
+      "total": 134.1,
+      "avg": 33.54
+     },
+     "global ba": {
+      "total": 2068.4,
+      "avg": 2068.41
+     },
+     "all": {
+      "total": 10559.1,
+      "avg": 14.91
+     }
+    },
+    "wall_s": 12.845865726470947,
+    "exit_code": 0,
+    "reference_fov": 72.34832618433929,
+    "reference_k1": -0.02277664308482745,
+    "final": {
+     "reference_frames": 141,
+     "our_frames": 202,
+     "common_frames": 141,
+     "ate_rms_pct": 0.09498833537100747,
+     "ate_median_pct": 0.07414630299929932,
+     "ate_max_pct": 0.2178799939225738,
+     "scale_windows": [
+      [
+       0.0,
+       20.0,
+       1.001308270625096
+      ]
+     ],
+     "scale_min": 1.001308270625096,
+     "scale_max": 1.001308270625096,
+     "rpe_direction_deg": 0.33849462253636653,
+     "rpe_length_ratio": 1.0027234828201483,
+     "rpe_length_ratio_p10": 0.9836814986103514,
+     "rpe_length_ratio_p90": 1.0090142529868695
+    },
+    "live": {
+     "reference_frames": 141,
+     "our_frames": 702,
+     "common_frames": 139,
+     "ate_rms_pct": 0.34411767056961645,
+     "ate_median_pct": 0.29944118346495974,
+     "ate_max_pct": 0.8701997296917905,
+     "scale_windows": [
+      [
+       0.4,
+       20.4,
+       1.008398303378176
+      ]
+     ],
+     "scale_min": 1.008398303378176,
+     "scale_max": 1.008398303378176,
+     "rpe_direction_deg": 0.936548639738505,
+     "rpe_length_ratio": 1.0037968276129465,
+     "rpe_length_ratio_p10": 0.9410631610875998,
+     "rpe_length_ratio_p90": 1.029874180458974
+    }
+   }
+  ],
+  "street_backward": [
+   {
+    "frames": 708,
+    "lost_frames": 0,
+    "maps": 1,
+    "tracked_per_frame": 477,
+    "keyframes": 76,
+    "points": 6429,
+    "surface_variation": 0.013,
+    "scattered_pct": 6,
+    "two_view_pct": 4,
+    "fov": 71.2,
+    "k1": -0.014,
+    "background_passes": 7,
+    "fps": 73.7,
+    "core_fps": 211.1,
+    "video_fps": 25.0,
+    "stages_ms": {
+     "decode*": {
+      "total": 6299.9,
+      "avg": 8.9
+     },
+     "init": {
+      "total": 425.4,
+      "avg": 6.97
+     },
+     "track": {
+      "total": 1284.0,
+      "avg": 1.98
+     },
+     "kf.cull": {
+      "total": 0.6,
+      "avg": 0.01
+     },
+     "kf.triangulate": {
+      "total": 223.7,
+      "avg": 3.02
+     },
+     "kf.fuse": {
+      "total": 337.6,
+      "avg": 4.56
+     },
+     "kf.local ba": {
+      "total": 868.7,
+      "avg": 11.74
+     },
+     "mapping": {
+      "total": 1444.9,
+      "avg": 19.53
+     },
+     "global ba": {
+      "total": 199.2,
+      "avg": 199.22
+     },
+     "all": {
+      "total": 9601.0,
+      "avg": 13.56
+     }
+    },
+    "wall_s": 9.910328149795532,
+    "exit_code": 0
+   }
+  ],
+  "street_rotated90": [
+   {
+    "frames": 708,
+    "lost_frames": 0,
+    "maps": 1,
+    "tracked_per_frame": 381,
+    "keyframes": 176,
+    "points": 12542,
+    "surface_variation": 0.018,
+    "scattered_pct": 8,
+    "two_view_pct": 2,
+    "fov": 71.7,
+    "k1": -0.016,
+    "background_passes": 6,
+    "fps": 62.3,
+    "core_fps": 80.4,
+    "video_fps": 25.0,
+    "stages_ms": {
+     "decode*": {
+      "total": 3326.9,
+      "avg": 4.7
+     },
+     "init": {
+      "total": 63.1,
+      "avg": 7.89
+     },
+     "track": {
+      "total": 1257.8,
+      "avg": 1.8
+     },
+     "kf.cull": {
+      "total": 1.3,
+      "avg": 0.01
+     },
+     "kf.triangulate": {
+      "total": 923.9,
+      "avg": 5.31
+     },
+     "kf.fuse": {
+      "total": 1417.8,
+      "avg": 8.15
+     },
+     "kf.local ba": {
+      "total": 2625.3,
+      "avg": 15.09
+     },
+     "mapping": {
+      "total": 6515.1,
+      "avg": 37.44
+     },
+     "kf.focal ba": {
+      "total": 1509.9,
+      "avg": 47.18
+     },
+     "global ba": {
+      "total": 965.6,
+      "avg": 965.55
+     },
+     "all": {
+      "total": 11363.9,
+      "avg": 16.05
+     }
+    },
+    "wall_s": 12.502925395965576,
+    "exit_code": 0
+   }
+  ],
+  "street_fast4x": [
+   {
+    "frames": 177,
+    "lost_frames": 0,
+    "maps": 1,
+    "tracked_per_frame": 317,
+    "keyframes": 85,
+    "points": 7793,
+    "surface_variation": 0.016,
+    "scattered_pct": 7,
+    "two_view_pct": 4,
+    "fov": 71.8,
+    "k1": -0.017,
+    "background_passes": 5,
+    "fps": 59.0,
+    "core_fps": 68.3,
+    "video_fps": 25.0,
+    "stages_ms": {
+     "decode*": {
+      "total": 546.9,
+      "avg": 3.09
+     },
+     "init": {
+      "total": 16.4,
+      "avg": 5.47
+     },
+     "track": {
+      "total": 295.3,
+      "avg": 1.7
+     },
+     "kf.cull": {
+      "total": 0.7,
+      "avg": 0.01
+     },
+     "kf.triangulate": {
+      "total": 391.0,
+      "avg": 4.71
+     },
+     "kf.fuse": {
+      "total": 425.3,
+      "avg": 5.12
+     },
+     "kf.local ba": {
+      "total": 802.7,
+      "avg": 9.67
+     },
+     "mapping": {
+      "total": 2066.3,
+      "avg": 24.9
+     },
+     "kf.focal ba": {
+      "total": 432.9,
+      "avg": 30.92
+     },
+     "global ba": {
+      "total": 215.2,
+      "avg": 215.17
+     },
+     "all": {
+      "total": 2998.9,
+      "avg": 16.94
+     }
+    },
+    "wall_s": 3.31256103515625,
+    "exit_code": 0
+   }
+  ],
+  "street_mirrored_backward": [
+   {
+    "frames": 708,
+    "lost_frames": 0,
+    "maps": 1,
+    "tracked_per_frame": 476,
+    "keyframes": 76,
+    "points": 6570,
+    "surface_variation": 0.014,
+    "scattered_pct": 8,
+    "two_view_pct": 4,
+    "fov": 71.8,
+    "k1": -0.022,
+    "background_passes": 6,
+    "fps": 58.4,
+    "core_fps": 151.4,
+    "video_fps": 25.0,
+    "stages_ms": {
+     "decode*": {
+      "total": 7393.5,
+      "avg": 10.44
+     },
+     "init": {
+      "total": 465.8,
+      "avg": 7.28
+     },
+     "track": {
+      "total": 1453.2,
+      "avg": 2.26
+     },
+     "kf.cull": {
+      "total": 0.6,
+      "avg": 0.01
+     },
+     "kf.triangulate": {
+      "total": 294.1,
+      "avg": 3.97
+     },
+     "kf.fuse": {
+      "total": 479.1,
+      "avg": 6.47
+     },
+     "kf.local ba": {
+      "total": 1033.7,
+      "avg": 13.97
+     },
+     "mapping": {
+      "total": 2661.0,
+      "avg": 35.96
+     },
+     "kf.focal ba": {
+      "total": 837.1,
+      "avg": 69.76
+     },
+     "global ba": {
+      "total": 97.0,
+      "avg": 97.03
+     },
+     "all": {
+      "total": 12126.1,
+      "avg": 17.13
+     }
+    },
+    "wall_s": 12.317549228668213,
+    "exit_code": 0
+   }
+  ],
+  "family": [
+   {
+    "frames": 4393,
+    "lost_frames": 0,
+    "maps": 1,
+    "tracked_per_frame": 371,
+    "keyframes": 731,
+    "points": 42314,
+    "surface_variation": 0.082,
+    "scattered_pct": 39,
+    "two_view_pct": 0,
+    "fov": 79.2,
+    "k1": -0.025,
+    "background_passes": 5,
+    "fps": 51.0,
+    "core_fps": 66.7,
+    "video_fps": 29.97,
+    "stages_ms": {
+     "decode*": {
+      "total": 36489.0,
+      "avg": 8.31
+     },
+     "init": {
+      "total": 1789.7,
+      "avg": 13.46
+     },
+     "track": {
+      "total": 10776.0,
+      "avg": 2.53
+     },
+     "kf.cull": {
+      "total": 5.3,
+      "avg": 0.01
+     },
+     "kf.triangulate": {
+      "total": 4383.6,
+      "avg": 6.01
+     },
+     "kf.fuse": {
+      "total": 8010.0,
+      "avg": 10.99
+     },
+     "kf.local ba": {
+      "total": 12844.2,
+      "avg": 17.62
+     },
+     "mapping": {
+      "total": 36006.9,
+      "avg": 49.39
+     },
+     "kf.focal ba": {
+      "total": 10574.8,
+      "avg": 73.95
+     },
+     "global ba": {
+      "total": 17244.5,
+      "avg": 17244.45
+     },
+     "all": {
+      "total": 86204.8,
+      "avg": 19.62
+     }
+    },
+    "wall_s": 103.92318558692932,
+    "exit_code": 0,
+    "reference_fov": 79.20526296012925,
+    "reference_k1": -0.028003659493048512,
+    "final": {
+     "reference_frames": 293,
+     "our_frames": 731,
+     "common_frames": 284,
+     "ate_rms_pct": 0.9401514793426744,
+     "ate_median_pct": 0.896013849031546,
+     "ate_max_pct": 1.5068202517273035,
+     "scale_windows": [
+      [
+       4.5045,
+       24.5045,
+       1.012855442770829
+      ],
+      [
+       24.5045,
+       44.5045,
+       1.0092456572442063
+      ],
+      [
+       44.5045,
+       64.50450000000001,
+       1.0095763265449094
+      ],
+      [
+       64.50450000000001,
+       84.50450000000001,
+       0.9668584716019683
+      ],
+      [
+       84.50450000000001,
+       104.50450000000001,
+       0.9827157030392799
+      ],
+      [
+       104.50450000000001,
+       124.50450000000001,
+       0.9805917487890877
+      ],
+      [
+       124.50450000000001,
+       144.5045,
+       0.9916426546394966
+      ]
+     ],
+     "scale_min": 0.9668584716019683,
+     "scale_max": 1.012855442770829,
+     "rpe_direction_deg": 0.7106031705334366,
+     "rpe_length_ratio": 0.9874007126952496,
+     "rpe_length_ratio_p10": 0.9617644390984893,
+     "rpe_length_ratio_p90": 1.016970787635187
+    },
+    "live": {
+     "reference_frames": 293,
+     "our_frames": 4261,
+     "common_frames": 284,
+     "ate_rms_pct": 6.6912285851519595,
+     "ate_median_pct": 6.131917105758899,
+     "ate_max_pct": 11.042696592550486,
+     "scale_windows": [
+      [
+       4.505,
+       24.505,
+       0.9414139955465924
+      ],
+      [
+       24.505,
+       44.504999999999995,
+       0.9197548938654874
+      ],
+      [
+       44.504999999999995,
+       64.505,
+       0.8761221364222829
+      ],
+      [
+       64.505,
+       84.505,
+       0.9032931810653708
+      ],
+      [
+       84.505,
+       104.505,
+       0.956144712546414
+      ],
+      [
+       104.505,
+       124.505,
+       1.1643319325954298
+      ],
+      [
+       124.505,
+       144.505,
+       0.987119504065373
+      ]
+     ],
+     "scale_min": 0.8761221364222829,
+     "scale_max": 1.1643319325954298,
+     "rpe_direction_deg": 2.35796178255847,
+     "rpe_length_ratio": 0.943953389081482,
+     "rpe_length_ratio_p10": 0.8894066256652905,
+     "rpe_length_ratio_p90": 0.9973782879960388
+    }
+   }
+  ],
+  "m60": [
+   {
+    "frames": 2878,
+    "lost_frames": 0,
+    "maps": 1,
+    "tracked_per_frame": 509,
+    "keyframes": 741,
+    "points": 57626,
+    "surface_variation": 0.073,
+    "scattered_pct": 34,
+    "two_view_pct": 0,
+    "fov": 63.2,
+    "k1": -0.117,
+    "background_passes": 11,
+    "fps": 70.1,
+    "core_fps": 78.5,
+    "video_fps": 23.98,
+    "stages_ms": {
+     "decode*": {
+      "total": 7517.9,
+      "avg": 2.61
+     },
+     "init": {
+      "total": 412.8,
+      "avg": 11.16
+     },
+     "track": {
+      "total": 6635.3,
+      "avg": 2.34
+     },
+     "kf.cull": {
+      "total": 6.5,
+      "avg": 0.01
+     },
+     "kf.triangulate": {
+      "total": 3544.1,
+      "avg": 4.8
+     },
+     "kf.fuse": {
+      "total": 7261.2,
+      "avg": 9.83
+     },
+     "kf.local ba": {
+      "total": 14672.6,
+      "avg": 19.85
+     },
+     "mapping": {
+      "total": 25714.1,
+      "avg": 34.8
+     },
+     "kf.focal ba": {
+      "total": 16.8,
+      "avg": 16.84
+     },
+     "global ba": {
+      "total": 3906.1,
+      "avg": 3906.12
+     },
+     "all": {
+      "total": 41043.1,
+      "avg": 14.26
+     }
+    },
+    "wall_s": 45.43758225440979,
+    "exit_code": 0,
+    "reference_fov": 63.26864736521978,
+    "reference_k1": -0.11940119876477719,
+    "final": {
+     "reference_frames": 240,
+     "our_frames": 741,
+     "common_frames": 240,
+     "ate_rms_pct": 0.4639462168305563,
+     "ate_median_pct": 0.3112638762251898,
+     "ate_max_pct": 0.9487633253241846,
+     "scale_windows": [
+      [
+       0.0,
+       20.0,
+       0.9903114556411468
+      ],
+      [
+       20.0,
+       40.0,
+       0.9939117620935376
+      ],
+      [
+       40.0,
+       60.0,
+       0.9881022744810382
+      ],
+      [
+       60.0,
+       80.0,
+       0.9932486684644678
+      ],
+      [
+       80.0,
+       100.0,
+       1.0176126959772644
+      ]
+     ],
+     "scale_min": 0.9881022744810382,
+     "scale_max": 1.0176126959772644,
+     "rpe_direction_deg": 0.5592015541837918,
+     "rpe_length_ratio": 0.9957938662124435,
+     "rpe_length_ratio_p10": 0.9716831402114756,
+     "rpe_length_ratio_p90": 1.0206277852926697
+    },
+    "live": {
+     "reference_frames": 240,
+     "our_frames": 2842,
+     "common_frames": 237,
+     "ate_rms_pct": 0.4707786279068761,
+     "ate_median_pct": 0.3502786173595452,
+     "ate_max_pct": 1.0856533208004828,
+     "scale_windows": [
+      [
+       1.502,
+       21.502,
+       0.9860413254311922
+      ],
+      [
+       21.502,
+       41.501999999999995,
+       0.9928500489776605
+      ],
+      [
+       41.501999999999995,
+       61.501999999999995,
+       0.9890251179989679
+      ],
+      [
+       61.501999999999995,
+       81.502,
+       0.993433873037811
+      ],
+      [
+       81.502,
+       101.502,
+       1.0166598177847297
+      ]
+     ],
+     "scale_min": 0.9860413254311922,
+     "scale_max": 1.0166598177847297,
+     "rpe_direction_deg": 0.636274652960719,
+     "rpe_length_ratio": 0.9976789492249757,
+     "rpe_length_ratio_p10": 0.9780912401504662,
+     "rpe_length_ratio_p90": 1.024158850919261
+    }
+   }
+  ]
+ }
+}

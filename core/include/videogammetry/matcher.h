@@ -11,6 +11,9 @@ namespace vg {
 // Uniform grid over keypoint positions for radius queries.
 class KeypointGrid {
 public:
+    // Cells in compressed form (offsets into one index array, filled by a
+    // counting pass): building it allocates twice, not once per cell. Within
+    // a cell, keypoints stay in index order.
     KeypointGrid(const std::vector<Keypoint>& keypoints, float cellSize) : cell_(cellSize) {
         if (keypoints.empty()) return;
         float maxX = 0, maxY = 0;
@@ -20,25 +23,31 @@ public:
         }
         cols_ = static_cast<int>(maxX / cell_) + 1;
         rows_ = static_cast<int>(maxY / cell_) + 1;
-        cells_.resize(static_cast<std::size_t>(cols_) * rows_);
-        for (int i = 0; i < static_cast<int>(keypoints.size()); ++i) {
-            const int c = static_cast<int>(std::max(keypoints[i].x, 0.0f) / cell_);
-            const int r = static_cast<int>(std::max(keypoints[i].y, 0.0f) / cell_);
-            cells_[static_cast<std::size_t>(r) * cols_ + c].push_back(i);
-        }
+        const auto cellOf = [&](const Keypoint& k) {
+            const int c = static_cast<int>(std::max(k.x, 0.0f) / cell_);
+            const int r = static_cast<int>(std::max(k.y, 0.0f) / cell_);
+            return static_cast<std::size_t>(r) * cols_ + c;
+        };
+        start_.assign(static_cast<std::size_t>(cols_) * rows_ + 1, 0);
+        for (const Keypoint& k : keypoints) ++start_[cellOf(k) + 1];
+        for (std::size_t c = 1; c < start_.size(); ++c) start_[c] += start_[c - 1];
+        index_.resize(keypoints.size());
+        std::vector<int> fill(start_.begin(), start_.end() - 1);
+        for (int i = 0; i < static_cast<int>(keypoints.size()); ++i) index_[fill[cellOf(keypoints[i])]++] = i;
     }
 
     // Calls fn(index) for every keypoint whose cell overlaps the square around (x, y).
     template <typename Fn>
     void forEachNear(float x, float y, float radius, Fn&& fn) const {
-        if (cells_.empty()) return;
+        if (index_.empty()) return;
         const int c0 = std::max(0, static_cast<int>((x - radius) / cell_));
         const int c1 = std::min(cols_ - 1, static_cast<int>((x + radius) / cell_));
         const int r0 = std::max(0, static_cast<int>((y - radius) / cell_));
         const int r1 = std::min(rows_ - 1, static_cast<int>((y + radius) / cell_));
         for (int r = r0; r <= r1; ++r) {
             for (int c = c0; c <= c1; ++c) {
-                for (int i : cells_[static_cast<std::size_t>(r) * cols_ + c]) fn(i);
+                const std::size_t cell = static_cast<std::size_t>(r) * cols_ + c;
+                for (int j = start_[cell]; j < start_[cell + 1]; ++j) fn(index_[j]);
             }
         }
     }
@@ -46,7 +55,8 @@ public:
 private:
     float cell_;
     int cols_ = 0, rows_ = 0;
-    std::vector<std::vector<int>> cells_;
+    std::vector<int> start_;  // cell -> first entry in index_ (cols * rows + 1)
+    std::vector<int> index_;  // keypoint indices, grouped by cell
 };
 
 struct Match {

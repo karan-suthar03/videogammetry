@@ -263,7 +263,7 @@ private:
                     lambda = std::max(lambda / 3, 1e-9);
                     ok = true;
                     ++accepted;
-                    if (gain < 1e-6) it = params_.maxIterations;  // converged
+                    if (gain < params_.minRelativeDecrease) it = params_.maxIterations;  // converged
                 } else {
                     lambda *= 4;
                 }
@@ -327,14 +327,17 @@ private:
 
     void linearize() {
         const int no = static_cast<int>(P_.observations.size());
-        lin_.assign(static_cast<std::size_t>(no), Linearized{});
+        lin_.resize(static_cast<std::size_t>(no));  // every entry is (re)written below: no zeroing
         parallelFor(pool_, 0, no, 256, [&](int o0, int o1) {
             for (int o = o0; o < o1; ++o) {
                 const BAObservation& ob = P_.observations[o];
                 const Pose& pose = P_.poses[ob.camera];
                 Linearized& L = lin_[o];
                 Vec3 c;
-                if (!active_[o] || !residual(pose, P_.points[ob.point], ob.xy, L.r, s_, k_, &c)) continue;
+                if (!active_[o] || !residual(pose, P_.points[ob.point], ob.xy, L.r, s_, k_, &c)) {
+                    L.w = 0;  // ignored; other fields are not read
+                    continue;
+                }
                 // Whitened: residual and Jacobians divided by the observation's sigma.
                 const double ws = 1.0 / ob.sigma;
                 L.r[0] *= ws;
@@ -402,24 +405,29 @@ private:
                 }
             }
         });
-        V_.assign(P_.points.size(), Mat33{});
-        gp_.assign(P_.points.size(), Vec3{});
-        W_.assign(P_.observations.size(), Mat63{});
-        Wgp_.assign(P_.points.size(), Mat23{});
+        // Every entry is written below (no zeroing pass over large arrays).
+        V_.resize(P_.points.size());
+        gp_.resize(P_.points.size());
+        W_.resize(P_.observations.size());
+        Wgp_.resize(P_.points.size());
         parallelFor(pool_, 0, static_cast<int>(P_.points.size()), 64, [&](int p0, int p1) {
             for (int p = p0; p < p1; ++p) {
                 double g[3] = {0, 0, 0};
                 Mat23 wg{};
+                Mat33 v{};
                 for (int o : pointObs_[p]) {
                     const Linearized& L = lin_[o];
-                    if (L.w == 0) continue;
+                    if (L.w == 0) {
+                        W_[o] = {};
+                        continue;
+                    }
                     for (int a = 0; a < 3; ++a) {
                         for (int gi = 0; gi < G_; ++gi) {
                             wg[gi * 3 + a] += L.w * (L.Jg[0][gi] * L.Jx[0][a] + L.Jg[1][gi] * L.Jx[1][a]);
                         }
                         g[a] += L.w * (L.Jx[0][a] * L.r[0] + L.Jx[1][a] * L.r[1]);
                         for (int b = 0; b < 3; ++b) {
-                            V_[p][a * 3 + b] += L.w * (L.Jx[0][a] * L.Jx[0][b] + L.Jx[1][a] * L.Jx[1][b]);
+                            v[a * 3 + b] += L.w * (L.Jx[0][a] * L.Jx[0][b] + L.Jx[1][a] * L.Jx[1][b]);
                         }
                     }
                     if (varIndex_[P_.observations[o].camera] >= 0) {
@@ -428,6 +436,7 @@ private:
                                 W_[o][a * 3 + b] = L.w * (L.Jc[0][a] * L.Jx[0][b] + L.Jc[1][a] * L.Jx[1][b]);
                     }
                 }
+                V_[p] = v;
                 gp_[p] = {g[0], g[1], g[2]};
                 Wgp_[p] = wg;
             }
@@ -436,7 +445,7 @@ private:
         // Intrinsics block and gradient, with the priors pulling toward the start.
         Ugg_ = {};
         gg_ = {};
-        for (const Linearized& L : lin_) {
+        if (G_ > 0) for (const Linearized& L : lin_) {
             if (L.w == 0) continue;
             for (int a = 0; a < G_; ++a) {
                 gg_[a] += L.w * (L.Jg[0][a] * L.r[0] + L.Jg[1][a] * L.r[1]);
@@ -461,19 +470,22 @@ private:
         const int n = nc + G_;
 
         // Damped, inverted point blocks.
-        std::vector<Mat33> Vinv(static_cast<std::size_t>(np));
-        std::vector<std::uint8_t> pointOk(static_cast<std::size_t>(np), 1);
-        for (int p = 0; p < np; ++p) {
-            Mat33 v = V_[p];
-            for (int d = 0; d < 3; ++d) v[d * 4] = v[d * 4] * (1 + lambda) + 1e-12;
-            if (!invert3(v, Vinv[p])) {
-                pointOk[p] = 0;
-                Vinv[p] = {};
+        std::vector<Mat33>& Vinv = Vinv_;
+        std::vector<std::uint8_t>& pointOk = pointOk_;
+        Vinv.resize(static_cast<std::size_t>(np));
+        pointOk.resize(static_cast<std::size_t>(np));
+        parallelFor(pool_, 0, np, 256, [&](int p0, int p1) {
+            for (int p = p0; p < p1; ++p) {
+                Mat33 v = V_[p];
+                for (int d = 0; d < 3; ++d) v[d * 4] = v[d * 4] * (1 + lambda) + 1e-12;
+                pointOk[p] = invert3(v, Vinv[p]) ? 1 : 0;
+                if (!pointOk[p]) Vinv[p] = {};
             }
-        }
+        });
 
         // Y_o = W_o * Vinv(point of o)  (6x3)
-        std::vector<Mat63> Y(P_.observations.size());
+        std::vector<Mat63>& Y = Y_;
+        Y.resize(P_.observations.size());  // every entry is written below
         parallelFor(pool_, 0, static_cast<int>(P_.observations.size()), 256, [&](int o0, int o1) {
             for (int o = o0; o < o1; ++o) {
                 const int p = P_.observations[o].point;
@@ -630,6 +642,9 @@ private:
     std::vector<Mat33> V_;
     std::vector<Vec3> gp_;
     std::vector<Mat63> W_;
+    std::vector<Mat63> Y_;                 // per solve: W_o V^-1
+    std::vector<Mat33> Vinv_;
+    std::vector<std::uint8_t> pointOk_;
 
     // Intrinsics being refined (G_ of them): focal scale (refined focal =
     // s_ * focal_) and radial distortion k_.

@@ -40,6 +40,9 @@ struct BAParams {
     // again without them. The Huber loss alone still lets wrong observations
     // bias the result by a few pixels. <= 0 disables the second pass.
     double outlierThresholdPx = 2.5;
+    // Converged when an accepted step lowers the cost by less than this
+    // fraction (per pass).
+    double minRelativeDecrease = 1e-4;
     // Camera model: SIMPLE_RADIAL (as COLMAP). An ideal normalized point p
     // is observed at (1 + k1 |p|^2) p, times the focal length; observations
     // are normalized but not undistorted. k1 is the current distortion.

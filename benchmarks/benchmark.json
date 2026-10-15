@@ -1,0 +1,12 @@
+{
+  "comment": "Sequences for tools/benchmark.py. Videos are not in git: see benchmarks/README.md. 'reference' is a COLMAP model (poses only) whose image n is video frame n * step.",
+  "sequences": [
+    {"name": "street", "video": "sample_video/street_walk_full_28s.mp4", "reference": "benchmarks/reference/street", "step": 5},
+    {"name": "street_backward", "video": "sample_video/variants/backward.mp4"},
+    {"name": "street_rotated90", "video": "sample_video/variants/rotated90.mp4"},
+    {"name": "street_fast4x", "video": "sample_video/variants/fast4x.mp4"},
+    {"name": "street_mirrored_backward", "video": "sample_video/variants/mirrored_backward.mp4"},
+    {"name": "family", "video": "sample_video/family_1080p.mp4", "reference": "benchmarks/reference/family", "step": 15},
+    {"name": "m60", "video": "sample_video/m60_920p_120s.mp4", "reference": "benchmarks/reference/m60", "step": 12}
+  ]
+}

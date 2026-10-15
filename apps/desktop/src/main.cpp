@@ -324,15 +324,15 @@ int main(int argc, char** argv) {
         std::printf("map:     not initialized (not enough parallax/matches between frames)\n");
     }
 
-    std::printf("\n  %-10s %10s %10s %10s\n", "stage", "total ms", "avg ms", "max ms");
+    std::printf("\n  %-14s %10s %10s %10s\n", "stage", "total ms", "avg ms", "max ms");
     // Decoding runs on its own thread; this is only the time spent waiting for it.
-    std::printf("  %-10s %10.1f %10.2f %10s\n", "decode*", decodeWaitMs, index ? decodeWaitMs / index : 0.0, "-");
+    std::printf("  %-14s %10.1f %10.2f %10s\n", "decode*", decodeWaitMs, index ? decodeWaitMs / index : 0.0, "-");
     double coreMs = 0.0;
     for (const vg::Profiler::Stage& s : reconstructor.profiler().stages()) {
-        std::printf("  %-10s %10.1f %10.2f %10.2f\n", s.name.c_str(), s.totalMs, s.avgMs(), s.maxMs);
-        coreMs += s.totalMs;
+        std::printf("  %-14s %10.1f %10.2f %10.2f\n", s.name.c_str(), s.totalMs, s.avgMs(), s.maxMs);
+        if (s.name.find('.') == std::string::npos) coreMs += s.totalMs;  // "a.b" are parts of stage "a"
     }
-    std::printf("  %-10s %10.1f %10.2f\n", "all", seconds * 1000.0, index ? seconds * 1000.0 / index : 0.0);
+    std::printf("  %-14s %10.1f %10.2f\n", "all", seconds * 1000.0, index ? seconds * 1000.0 / index : 0.0);
     std::printf("\nthroughput: %.1f fps overall, %.1f fps core only (video is %.2f fps)\n",
                 seconds > 0 ? index / seconds : 0.0,
                 coreMs > 0 ? index / (coreMs / 1000.0) : 0.0, info.fps);

@@ -153,7 +153,16 @@ private:
     void setBad(int pointId);
     // Fusion (see MappingParams): projects points into keyframe k and links
     // or merges them with matching keypoints.
-    void fuseIntoKeyframe(int k, const std::vector<int>& pointIds);
+    // What fusion needs per point, computed once per keyframe insertion (the
+    // same points are projected into many keyframes).
+    struct FuseCandidate {
+        int id = -1;
+        Vec3 meanDir;                                  // mean viewing direction (unit)
+        std::vector<int> observers;                    // keyframes that see it
+        std::vector<std::pair<double, int>> logDistLevel;  // per observation: log distance, pyramid level
+    };
+    std::vector<FuseCandidate> fuseCandidates(const std::vector<int>& pointIds) const;
+    void fuseIntoKeyframe(int k, const std::vector<FuseCandidate>& candidates);
     void searchInNeighbors(int k);
     void mergePoints(int keep, int drop);  // moves drop's observations to keep
     // Removes new points that later keyframes did not confirm.

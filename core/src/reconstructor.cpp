@@ -485,7 +485,10 @@ void Reconstructor::addKeyframe() {
     lastKeyframeFrame_ = static_cast<long>(frameCount_);
     lastWasKeyframe_ = true;
 
-    cullRecentPoints();
+    {
+        auto t = profiler_.scope("kf.cull");
+        cullRecentPoints();
+    }
 
     // Triangulation partners: of the keyframes sharing the most points with
     // the new one, those whose baseline relative to the scene depth gives
@@ -503,8 +506,14 @@ void Reconstructor::addKeyframe() {
         if (ratio >= mp.minBaselineRatio) partners.push_back(k);
         if (static_cast<int>(partners.size()) >= mp.triangulationKeyframes) break;
     }
-    for (int k : partners) triangulateBetween(k, n - 1);
-    searchInNeighbors(n - 1);
+    {
+        auto t = profiler_.scope("kf.triangulate");
+        for (int k : partners) triangulateBetween(k, n - 1);
+    }
+    {
+        auto t = profiler_.scope("kf.fuse");
+        searchInNeighbors(n - 1);
+    }
 
     if (mp.localBAKeyframes > 0) {
         // The new keyframe and the keyframes sharing the most points with it
@@ -514,6 +523,7 @@ void Reconstructor::addKeyframe() {
             if (static_cast<int>(local.size()) >= mp.localBAKeyframes) break;
             local.push_back(k);
         }
+        auto t = profiler_.scope("kf.local ba");
         const BAReport r = adjust(local, mp.localBAIterations);
         if (r.ok) {
             ++stats_.localBAs;
@@ -532,6 +542,7 @@ void Reconstructor::addKeyframe() {
             if (static_cast<int>(window.size()) >= mp.focalBAKeyframes) break;
             window.push_back(k);
         }
+        auto t = profiler_.scope("kf.focal ba");
         const BAReport r = adjust(window, mp.localBAIterations, true);
         if (r.ok) {
             pose_ = keyframes_.back().pose;
@@ -883,45 +894,77 @@ void Reconstructor::mergePoints(int keep, int drop) {
     }
 }
 
-void Reconstructor::fuseIntoKeyframe(int k, const std::vector<int>& pointIds) {
+std::vector<Reconstructor::FuseCandidate> Reconstructor::fuseCandidates(const std::vector<int>& pointIds) const {
+    std::vector<Vec3> centers(keyframes_.size());
+    std::vector<char> centerKnown(keyframes_.size(), 0);
+    for (int id : pointIds) {
+        for (const PointObservation& o : points_[id].observations) {
+            if (!centerKnown[o.keyframe]) {
+                centers[o.keyframe] = keyframes_[o.keyframe].pose.center();
+                centerKnown[o.keyframe] = 1;
+            }
+        }
+    }
+    std::vector<FuseCandidate> out(pointIds.size());
+    parallelFor(pool_.get(), 0, static_cast<int>(pointIds.size()), 128, [&](int j0, int j1) {
+        for (int j = j0; j < j1; ++j) {
+            const MapPoint& p = points_[pointIds[j]];
+            FuseCandidate& c = out[j];
+            c.id = pointIds[j];
+            c.observers.reserve(p.observations.size());
+            c.logDistLevel.reserve(p.observations.size());
+            Vec3 sum;
+            for (const PointObservation& o : p.observations) {
+                const Vec3 d0 = p.position - centers[o.keyframe];
+                const double n = norm(d0);
+                if (n <= 0) continue;
+                sum = sum + d0 * (1.0 / n);
+                c.observers.push_back(o.keyframe);
+                c.logDistLevel.push_back({std::log(n), keyframes_[o.keyframe].keypoints[o.keypoint].level});
+            }
+            c.meanDir = normalized(sum);
+        }
+    });
+    return out;
+}
+
+void Reconstructor::fuseIntoKeyframe(int k, const std::vector<FuseCandidate>& candidates) {
     const MappingParams& mp = options_.mapping;
     const Keyframe& kf = keyframes_[k];
     const Vec3 center = kf.pose.center();
     const double cosMaxView = std::cos(mp.maxViewAngleDeg / kRadToDeg);
     const float scaleFactor = options_.orb.scaleFactor;
+    const double logScale = std::log(static_cast<double>(scaleFactor));
+    const int maxLevel = std::max(options_.orb.levels - 1, 0);
     const KeypointGrid grid(kf.keypoints, 16.0f);
 
     // Best keypoint for each point (read-only, in parallel), applied in order.
-    std::vector<int> bestKeypoint(pointIds.size(), -1);
-    parallelFor(pool_.get(), 0, static_cast<int>(pointIds.size()), 64, [&](int j0, int j1) {
+    std::vector<int> bestKeypoint(candidates.size(), -1);
+    parallelFor(pool_.get(), 0, static_cast<int>(candidates.size()), 64, [&](int j0, int j1) {
         for (int j = j0; j < j1; ++j) {
-            const MapPoint& p = points_[pointIds[j]];
-            if (p.bad) continue;
+            const FuseCandidate& cand = candidates[j];
+            if (std::find(cand.observers.begin(), cand.observers.end(), k) != cand.observers.end()) continue;
+            const MapPoint& p = points_[cand.id];
+            if (p.bad || cand.logDistLevel.empty()) continue;
             const Vec3 ray = p.position - center;
             const double dist = norm(ray);
-            if (dist <= 0) continue;
+            if (dist <= 0 || dot(ray, cand.meanDir) < cosMaxView * dist) continue;
 
-            // Mean viewing direction, and the pyramid level the point should
-            // appear at from here: a feature seen at level L from distance d0
-            // appears about log(d0 / d) / log(scaleFactor) levels higher from d
-            // (predicted from the observation at the most similar distance).
-            bool seen = false;
-            Vec3 meanDir;
+            // The pyramid level the point should appear at from here: a
+            // feature seen at level L from distance d0 appears about
+            // log(d0 / d) / log(scaleFactor) levels higher from d (predicted
+            // from the observation at the most similar distance).
+            const double logDist = std::log(dist);
             double bestLogRatio = 1e30;
             int predictedLevel = p.level;
-            for (const PointObservation& o : p.observations) {
-                if (o.keyframe == k) seen = true;
-                const Vec3 d0 = p.position - keyframes_[o.keyframe].pose.center();
-                meanDir = meanDir + normalized(d0);
-                const double logRatio = std::log(norm(d0) / dist);
+            for (const auto& [logD0, level] : cand.logDistLevel) {
+                const double logRatio = logD0 - logDist;
                 if (std::abs(logRatio) < std::abs(bestLogRatio)) {
                     bestLogRatio = logRatio;
-                    const int level = keyframes_[o.keyframe].keypoints[o.keypoint].level;
-                    predictedLevel = static_cast<int>(std::lround(level + logRatio / std::log(scaleFactor)));
+                    predictedLevel = static_cast<int>(std::lround(level + logRatio / logScale));
                 }
             }
-            if (seen || dot(ray, normalized(meanDir)) < cosMaxView * dist) continue;
-            predictedLevel = std::clamp(predictedLevel, 0, std::max(options_.orb.levels - 1, 0));
+            predictedLevel = std::clamp(predictedLevel, 0, maxLevel);
 
             const Vec3 c = kf.pose.transform(p.position);
             if (c.z <= 1e-6) continue;
@@ -954,9 +997,9 @@ void Reconstructor::fuseIntoKeyframe(int k, const std::vector<int>& pointIds) {
         }
     });
 
-    for (std::size_t j = 0; j < pointIds.size(); ++j) {
+    for (std::size_t j = 0; j < candidates.size(); ++j) {
         const int kp = bestKeypoint[j];
-        int id = pointIds[j];
+        const int id = candidates[j].id;
         if (kp < 0 || points_[id].bad) continue;
         if (std::any_of(points_[id].observations.begin(), points_[id].observations.end(),
                         [&](const PointObservation& o) { return o.keyframe == k; })) {
@@ -1004,12 +1047,13 @@ void Reconstructor::searchInNeighbors(int k) {
     }
 
     // Forward: the new keyframe's points into each neighbour.
-    for (int t : targets) {
+    {
         std::vector<int> ids;
         for (int id : keyframes_[k].pointIds) {
             if (id >= 0 && !points_[id].bad) ids.push_back(id);
         }
-        fuseIntoKeyframe(t, ids);
+        const std::vector<FuseCandidate> candidates = fuseCandidates(ids);
+        for (int t : targets) fuseIntoKeyframe(t, candidates);
     }
 
     // Backward: the neighbours' points into the new keyframe.
@@ -1023,7 +1067,7 @@ void Reconstructor::searchInNeighbors(int k) {
             }
         }
     }
-    fuseIntoKeyframe(k, ids);
+    fuseIntoKeyframe(k, fuseCandidates(ids));
 }
 
 void Reconstructor::cullRecentPoints() {
