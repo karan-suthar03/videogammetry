@@ -49,7 +49,7 @@ class LiveSession {
 public:
     struct Settings {
         vg::Reconstructor::Options options;
-        bool realTime = true;  // pace to the video's frame rate
+        bool realTime = false;  // pace to the video's frame rate (default: as fast as possible)
         int thumbnailSize = 420;  // long side of the video thumbnail, pixels
     };
 
@@ -81,7 +81,7 @@ private:
     Settings settings_;
     std::unique_ptr<vg::Reconstructor> reconstructor_;
 
-    std::atomic<bool> stop_{false}, paused_{false}, realTime_{true}, done_{false};
+    std::atomic<bool> stop_{false}, paused_{false}, realTime_{false}, done_{false};
     long frame_ = 0, frameCount_ = 0;
     double timestamp_ = 0.0;
 
