@@ -58,7 +58,7 @@ One platform-independent C++ core, plus thin per-platform apps that include it.
 core/                  C++20 static library (namespace vg): the whole pipeline
   include/videogammetry/   public API: FrameView, Reconstructor, PointCloud, writePly
   src/
-apps/desktop/          CLI for Windows + Linux (+ macOS), same source
+apps/desktop/          CLI for Windows + Linux (+ macOS), same source; live viewer (Win32 window, CPU renderer)
 apps/android/          Gradle project; JNI bridge (app/src/main/cpp) links core
 tools/                 offline dev tools (train_orb_pattern)
 tests/                 unit tests (CTest)
@@ -70,6 +70,7 @@ CMakePresets.json      presets: windows (MSVC), linux (Ninja)
 - Desktop decodes video with FFmpeg (`apps/desktop/src/video_reader.*`, LGPL shared build, dynamically linked).
 - Build Windows: `powershell -ExecutionPolicy Bypass -File scripts/fetch_ffmpeg_windows.ps1` (once, downloads FFmpeg 8.1 into `third_party/`), then `cmake --preset windows && cmake --build --preset windows-release`
 - Run: `build/windows/apps/desktop/Release/videogammetry.exe sample_video/street_walk_10s.mp4 -o cloud.ply [--save-frame <n> frame.ppm]`
+- Live viewer (Windows): `build/windows/apps/desktop/Release/videogammetry_viewer.exe [video] [--fov <deg>] [--size <px>] [--max-speed]` plays the video through the reconstruction and draws the point cloud, keyframe and current-camera frustums and the camera path as they are built, plus the video with tracked keypoints. Paced to the video's frame rate by default (M toggles max speed, Space pauses); S saves the final `.ply`. Rendering is software-only (`apps/desktop/src/viewer/renderer.*`, portable); only `main_win32.cpp` is Windows-specific
 - Build Linux: `cmake --preset linux && cmake --build --preset linux-release` (needs `g++`/`clang++`, `cmake`, `ninja`, `pkg-config`, FFmpeg dev packages; untested)
 - Build Android: open `apps/android` in Android Studio (needs NDK + CMake from SDK Manager)
 - Tests: `ctest --test-dir build/windows -C Release`
@@ -79,7 +80,7 @@ CMakePresets.json      presets: windows (MSVC), linux (Ninja)
 
 ## 7. Interface
 - CLI first (`videogammetry input.mp4 -o cloud.ply`)
-- Viewer: external tool (CloudCompare / MeshLab) at first
+- Viewer: built-in live viewer on Windows (`videogammetry_viewer`); external tools (CloudCompare / MeshLab) for the saved `.ply`
 
 ## 8. Tech constraints
 - **OS:** cross-platform (developed on Windows 11)

@@ -11,14 +11,9 @@
 #include <thread>
 #include <vector>
 
-#ifdef _WIN32
-#define NOMINMAX
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#endif
-
 #include "frame_prefetcher.h"
 #include "image_io.h"
+#include "power.h"
 #include "video_reader.h"
 #include "videogammetry/reconstructor.h"
 #include "videogammetry/version.h"
@@ -42,19 +37,6 @@ void printUsage() {
         "                              and <dir>/map.bmp (top and side view of the result)\n"
         "  --dump-every <n>            frame interval for --dump (default 25)\n"
         "  --save-frame <n> <file>     write decoded frame n (0-based) as .bmp or .ppm\n");
-}
-
-// Windows 11 may treat a console process without a focused window as
-// background work and apply "EcoQoS" power throttling: lower clocks and
-// efficiency cores. Opt out, since this is a throughput-bound job.
-void disablePowerThrottling() {
-#ifdef _WIN32
-    PROCESS_POWER_THROTTLING_STATE state{};
-    state.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
-    state.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
-    state.StateMask = 0;  // execution speed throttling off
-    SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &state, sizeof(state));
-#endif
 }
 
 bool ensureDir(const std::filesystem::path& dir) {
