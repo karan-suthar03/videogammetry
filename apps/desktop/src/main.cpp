@@ -35,6 +35,8 @@ void printUsage() {
         "  --serial                    extract features inside the reconstructor, one frame at a time\n"
         "  --center-boost <x>          extra share of features for the middle of the image, 0 = even (default 0)\n"
         "  --confirm <n>               keyframes that must see a new point to keep it, 2 = no culling (default 3)\n"
+        "  --fuse <n>                  covisible keyframes to fuse points with, 0 = no fusion (default 10)\n"
+        "  --no-merge                  fusion only links points to free keypoints, never merges duplicates\n"
         "  --fov <deg>                 assumed field of view across the long side of the frame (default 65)\n"
         "  --dump <dir>                write debug images: <dir>/tracking (every --dump-every frames)\n"
         "                              and <dir>/map.bmp (top and side view of the result)\n"
@@ -104,6 +106,10 @@ int main(int argc, char** argv) {
             extractWorkers = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--center-boost") == 0 && i + 1 < argc) {
             options.orb.centerBoost = static_cast<float>(std::strtod(argv[++i], nullptr));
+        } else if (std::strcmp(argv[i], "--no-merge") == 0) {
+            options.mapping.fuseMerge = false;
+        } else if (std::strcmp(argv[i], "--fuse") == 0 && i + 1 < argc) {
+            options.mapping.fuseNeighbours = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--confirm") == 0 && i + 1 < argc) {
             options.mapping.minConfirmingKeyframes = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--fov") == 0 && i + 1 < argc) {
@@ -281,7 +287,8 @@ int main(int argc, char** argv) {
                         st.globalBACameras, st.globalBAPoints, st.globalBA.initialRmsPx, st.globalBA.finalRmsPx,
                         st.globalBA.iterations, st.globalBA.outliers);
         }
-        std::printf("points:  %d triangulated, %d culled as unconfirmed\n", st.pointsCreated, st.pointsCulled);
+        std::printf("points:  %d triangulated, %d culled as unconfirmed; fusion: %d merged, %d observations added\n",
+                    st.pointsCreated, st.pointsCulled, st.pointsMerged, st.observationsFused);
         const vg::MapQuality q =vg::evaluateMap(reconstructor.mapPoints(), reconstructor.keyframes());
         std::printf("quality: %d points: %.1f keyframes/point avg, %.0f%% seen by only 2; parallax median %.1f deg, "
                     "%.0f%% below 2 deg; surface variation median %.3f, %.0f%% scattered\n",

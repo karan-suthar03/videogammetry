@@ -17,6 +17,10 @@ struct BAObservation {
     int camera = -1;
     int point = -1;
     Vec2 xy;  // normalized image coordinates
+    // Expected error scale: the keypoint's pyramid-level scale (coarser levels
+    // localize less precisely). Residuals are divided by it, so it weights the
+    // observation by 1/sigma^2 and scales the robust loss and outlier test.
+    double sigma = 1.0;
 };
 
 struct BAProblem {

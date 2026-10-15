@@ -352,6 +352,8 @@ void showUsage() {
                 L"  --fov <deg>     assumed field of view across the long side (default 65)\n"
                 L"  --size <px>     long side of the processed frame, 0 = full size (default)\n"
                 L"  --center-boost <x>  extra share of features for the middle of the image (default 0)\n"
+                L"  --fuse <n>      covisible keyframes to fuse points with, 0 = no fusion (default 10)\n"
+                L"  --no-merge      fusion only links points to free keypoints, never merges duplicates\n"
                 L"  --real-time     play at the video's frame rate instead of as fast as possible\n\n"
                 L"Without a video, a file dialog opens.",
                 L"Videogammetry viewer", MB_OK | MB_ICONINFORMATION);
@@ -371,6 +373,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCmd) {
             g.settings.options.fovDeg = _wtof(__wargv[++i]);
         } else if (a == L"--size" && i + 1 < __argc) {
             g.settings.options.processSize = _wtoi(__wargv[++i]);
+        } else if (a == L"--fuse" && i + 1 < __argc) {
+            g.settings.options.mapping.fuseNeighbours = _wtoi(__wargv[++i]);
+        } else if (a == L"--no-merge") {
+            g.settings.options.mapping.fuseMerge = false;
         } else if (a == L"--center-boost" && i + 1 < __argc) {
             g.settings.options.orb.centerBoost = static_cast<float>(_wtof(__wargv[++i]));
         } else if (a == L"--real-time") {

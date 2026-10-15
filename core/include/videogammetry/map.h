@@ -85,6 +85,20 @@ struct MappingParams {
     // triangulation from one keyframe pair is unconfirmed: often a mismatch).
     int probationKeyframes = 2;
     int minConfirmingKeyframes = 3;
+
+    // Fusion: after triangulation, the new keyframe's points are projected
+    // into its `fuseNeighbours` most covisible keyframes (plus up to
+    // `fuseSecondOrder` best neighbours of each) and theirs into it. A
+    // projection that lands on a matching keypoint becomes an observation, or,
+    // if that keypoint already has a point, the two points are merged. This
+    // links new keyframes to older points (duplicates and scale drift shrink).
+    int fuseNeighbours = 10;
+    int fuseSecondOrder = 5;
+    float fuseRadiusPx = 3.0f;         // times the predicted pyramid scale
+    int fuseMaxHamming = 50;
+    float fuseRatio = 0.8f;            // best must beat the second best within the window
+    bool fuseMerge = true;             // merge duplicates (otherwise only link free keypoints)
+    double maxViewAngleDeg = 60.0;     // from the point's mean viewing direction
 };
 
 }  // namespace vg

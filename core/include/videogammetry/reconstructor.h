@@ -61,6 +61,8 @@ public:
         int localBAOutliers = 0;                           // observations removed
         int pointsCreated = 0;
         int pointsCulled = 0;    // new points removed for lack of confirmation
+        int pointsMerged = 0;    // duplicates merged by fusion
+        int observationsFused = 0;  // observations added by fusion
         BAReport globalBA;                                 // set by finish()
         int globalBACameras = 0, globalBAPoints = 0;
     };
@@ -132,6 +134,11 @@ private:
     void addObservation(int pointId, PointObservation obs);
     void removeObservation(int pointId, PointObservation obs);  // the point goes bad below 2 views
     void setBad(int pointId);
+    // Fusion (see MappingParams): projects points into keyframe k and links
+    // or merges them with matching keypoints.
+    void fuseIntoKeyframe(int k, const std::vector<int>& pointIds);
+    void searchInNeighbors(int k);
+    void mergePoints(int keep, int drop);  // moves drop's observations to keep
     // Removes new points that later keyframes did not confirm.
     void cullRecentPoints();
     double medianSceneDepth(const Keyframe& kf) const;

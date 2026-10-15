@@ -488,6 +488,7 @@ void Reconstructor::addKeyframe() {
         if (static_cast<int>(partners.size()) >= mp.triangulationKeyframes) break;
     }
     for (int k : partners) triangulateBetween(k, n - 1);
+    searchInNeighbors(n - 1);
 
     if (mp.localBAKeyframes > 0) {
         // The new keyframe and the keyframes sharing the most points with it
@@ -559,8 +560,9 @@ BAReport Reconstructor::adjust(const std::vector<int>& keyframes, int iterations
         for (std::size_t i = 0; i < kf.pointIds.size(); ++i) {
             const int id = kf.pointIds[i];
             if (id < 0 || points_[id].bad || pointIndex[id] < 0) continue;
-            problem.observations.push_back(
-                {camera, pointIndex[id], intrinsics_.normalize(kf.keypoints[i].x, kf.keypoints[i].y)});
+            problem.observations.push_back({camera, pointIndex[id],
+                                            intrinsics_.normalize(kf.keypoints[i].x, kf.keypoints[i].y),
+                                            kf.keypoints[i].scale});
             obsRef.push_back({k, static_cast<int>(i)});
         }
         cameraKeyframe.push_back(k);
@@ -627,6 +629,194 @@ void Reconstructor::setBad(int pointId) {
     }
     p.observations.clear();
     p.bad = true;
+}
+
+void Reconstructor::mergePoints(int keep, int drop) {
+    if (keep == drop || points_[keep].bad || points_[drop].bad) return;
+    MapPoint& k = points_[keep];
+
+    // Verify: drop's observations must agree with keep's position (the
+    // projection test that found the duplicate covered one keyframe only).
+    // Mostly disagreeing: two different points, or the map has drifted
+    // between them -- leave both.
+    const auto fits = [&](const PointObservation& o) {
+        const Keyframe& kf = keyframes_[o.keyframe];
+        const Keypoint& kp = kf.keypoints[o.keypoint];
+        const double err = reprojectionErrorPx(kf.pose, k.position, intrinsics_.normalize(kp.x, kp.y), intrinsics_.fx);
+        return err * err <= 5.991 * kp.scale * kp.scale;
+    };
+    const std::vector<PointObservation> dropObs = points_[drop].observations;
+    const auto agreeing = std::count_if(dropObs.begin(), dropObs.end(), fits);
+    if (2 * agreeing < static_cast<long>(dropObs.size())) return;
+
+    for (const PointObservation& o : dropObs) {
+        int& slot = keyframes_[o.keyframe].pointIds[o.keypoint];
+        const bool keepSeen = std::any_of(k.observations.begin(), k.observations.end(),
+                                          [&](const PointObservation& ko) { return ko.keyframe == o.keyframe; });
+        if (keepSeen || !fits(o)) {
+            if (slot == drop) slot = -1;  // the keypoint is freed
+        } else {
+            slot = keep;
+            k.observations.push_back(o);
+        }
+    }
+    points_[drop].observations.clear();
+    points_[drop].bad = true;
+    ++stats_.pointsMerged;
+
+    // Appearance from the most recent keyframe that sees it: tracking matches
+    // against current frames, and an old view's descriptor may no longer fit.
+    const PointObservation* newest = nullptr;
+    for (const PointObservation& o : k.observations) {
+        if (!newest || o.keyframe > newest->keyframe) newest = &o;
+    }
+    if (newest) {
+        k.descriptor = keyframes_[newest->keyframe].descriptors[newest->keypoint];
+        k.level = keyframes_[newest->keyframe].keypoints[newest->keypoint].level;
+    }
+}
+
+void Reconstructor::fuseIntoKeyframe(int k, const std::vector<int>& pointIds) {
+    const MappingParams& mp = options_.mapping;
+    const Keyframe& kf = keyframes_[k];
+    const Vec3 center = kf.pose.center();
+    const double cosMaxView = std::cos(mp.maxViewAngleDeg / kRadToDeg);
+    const float scaleFactor = options_.orb.scaleFactor;
+    const KeypointGrid grid(kf.keypoints, 16.0f);
+
+    // Best keypoint for each point (read-only, in parallel), applied in order.
+    std::vector<int> bestKeypoint(pointIds.size(), -1);
+    parallelFor(pool_.get(), 0, static_cast<int>(pointIds.size()), 64, [&](int j0, int j1) {
+        for (int j = j0; j < j1; ++j) {
+            const MapPoint& p = points_[pointIds[j]];
+            if (p.bad) continue;
+            const Vec3 ray = p.position - center;
+            const double dist = norm(ray);
+            if (dist <= 0) continue;
+
+            // Mean viewing direction, and the pyramid level the point should
+            // appear at from here: a feature seen at level L from distance d0
+            // appears about log(d0 / d) / log(scaleFactor) levels higher from d
+            // (predicted from the observation at the most similar distance).
+            bool seen = false;
+            Vec3 meanDir;
+            double bestLogRatio = 1e30;
+            int predictedLevel = p.level;
+            for (const PointObservation& o : p.observations) {
+                if (o.keyframe == k) seen = true;
+                const Vec3 d0 = p.position - keyframes_[o.keyframe].pose.center();
+                meanDir = meanDir + normalized(d0);
+                const double logRatio = std::log(norm(d0) / dist);
+                if (std::abs(logRatio) < std::abs(bestLogRatio)) {
+                    bestLogRatio = logRatio;
+                    const int level = keyframes_[o.keyframe].keypoints[o.keypoint].level;
+                    predictedLevel = static_cast<int>(std::lround(level + logRatio / std::log(scaleFactor)));
+                }
+            }
+            if (seen || dot(ray, normalized(meanDir)) < cosMaxView * dist) continue;
+            predictedLevel = std::clamp(predictedLevel, 0, std::max(options_.orb.levels - 1, 0));
+
+            const Vec3 c = kf.pose.transform(p.position);
+            if (c.z <= 1e-6) continue;
+            const float u = static_cast<float>(intrinsics_.fx * c.x / c.z + intrinsics_.cx);
+            const float v = static_cast<float>(intrinsics_.fy * c.y / c.z + intrinsics_.cy);
+            if (u < 0 || v < 0 || u >= imageWidth_ || v >= imageHeight_) continue;
+
+            const float radius = mp.fuseRadiusPx * std::pow(scaleFactor, static_cast<float>(predictedLevel));
+            int best = -1, bestDist = INT_MAX, second = INT_MAX;
+            grid.forEachNear(u, v, radius, [&](int i) {
+                const Keypoint& kp = kf.keypoints[i];
+                if (std::abs(kp.level - predictedLevel) > 1) return;
+                const float dx = kp.x - u, dy = kp.y - v;
+                // Reprojection within the 95% chi-square bound (2 dof) at the keypoint's scale.
+                if (dx * dx + dy * dy > 5.991f * kp.scale * kp.scale) return;
+                const int d = hammingDistance(p.descriptor, kf.descriptors[i]);
+                if (d < bestDist) {
+                    second = bestDist;
+                    bestDist = d;
+                    best = i;
+                } else if (d < second) {
+                    second = d;
+                }
+            });
+            // Unambiguous only: repeated texture (windows, paving) has look-alikes nearby.
+            if (best >= 0 && bestDist <= mp.fuseMaxHamming &&
+                (second == INT_MAX || bestDist < mp.fuseRatio * second)) {
+                bestKeypoint[j] = best;
+            }
+        }
+    });
+
+    for (std::size_t j = 0; j < pointIds.size(); ++j) {
+        const int kp = bestKeypoint[j];
+        int id = pointIds[j];
+        if (kp < 0 || points_[id].bad) continue;
+        if (std::any_of(points_[id].observations.begin(), points_[id].observations.end(),
+                        [&](const PointObservation& o) { return o.keyframe == k; })) {
+            continue;  // linked meanwhile (e.g. through a merge)
+        }
+        const int existing = keyframes_[k].pointIds[kp];
+        if (existing >= 0 && !points_[existing].bad) {
+            if (!options_.mapping.fuseMerge) continue;
+            // Two points for one feature: keep the better observed one.
+            if (points_[existing].observations.size() >= points_[id].observations.size()) {
+                mergePoints(existing, id);
+            } else {
+                mergePoints(id, existing);
+            }
+        } else {
+            addObservation(id, {k, kp});
+            ++stats_.observationsFused;
+        }
+    }
+}
+
+void Reconstructor::searchInNeighbors(int k) {
+    const MappingParams& mp = options_.mapping;
+    if (mp.fuseNeighbours <= 0) return;
+
+    // Neighbours: most covisible keyframes, and their best neighbours.
+    std::vector<char> chosen(keyframes_.size(), 0);
+    chosen[k] = 1;
+    std::vector<int> targets;
+    const std::vector<std::pair<int, int>> first = covisibleKeyframes(k);
+    for (int i = 0; i < static_cast<int>(first.size()) && i < mp.fuseNeighbours; ++i) {
+        chosen[first[i].first] = 1;
+        targets.push_back(first[i].first);
+    }
+    const std::size_t firstOrder = targets.size();
+    for (std::size_t i = 0; i < firstOrder; ++i) {
+        const std::vector<std::pair<int, int>> second = covisibleKeyframes(targets[i]);
+        for (int j = 0, added = 0; j < static_cast<int>(second.size()) && added < mp.fuseSecondOrder; ++j) {
+            const int t = second[j].first;
+            if (chosen[t]) continue;
+            chosen[t] = 1;
+            targets.push_back(t);
+            ++added;
+        }
+    }
+
+    // Forward: the new keyframe's points into each neighbour.
+    for (int t : targets) {
+        std::vector<int> ids;
+        for (int id : keyframes_[k].pointIds) {
+            if (id >= 0 && !points_[id].bad) ids.push_back(id);
+        }
+        fuseIntoKeyframe(t, ids);
+    }
+
+    // Backward: the neighbours' points into the new keyframe.
+    std::vector<char> collected(points_.size(), 0);
+    std::vector<int> ids;
+    for (int t : targets) {
+        for (int id : keyframes_[t].pointIds) {
+            if (id >= 0 && !points_[id].bad && !collected[id]) {
+                collected[id] = 1;
+                ids.push_back(id);
+            }
+        }
+    }
+    fuseIntoKeyframe(k, ids);
 }
 
 void Reconstructor::cullRecentPoints() {

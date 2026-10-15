@@ -159,7 +159,8 @@ public:
             for (std::size_t o = 0; o < P_.observations.size(); ++o) {
                 const BAObservation& ob = P_.observations[o];
                 double r[2];
-                if (!residual(P_.poses[ob.camera], P_.points[ob.point], ob.xy, r) || std::hypot(r[0], r[1]) > th) {
+                if (!residual(P_.poses[ob.camera], P_.points[ob.point], ob.xy, r) ||
+                    std::hypot(r[0], r[1]) > th * ob.sigma) {
                     active_[o] = 0;
                     ++rejected;
                 }
@@ -228,7 +229,7 @@ private:
                 c += huberCost(10 * h_, h_);  // constant penalty keeps the cost finite
                 continue;
             }
-            c += huberCost(std::hypot(r[0], r[1]), h_);
+            c += huberCost(std::hypot(r[0], r[1]) / o.sigma, h_);
         }
         return c;
     }
@@ -257,11 +258,15 @@ private:
                 Linearized& L = lin_[o];
                 Vec3 c;
                 if (!active_[o] || !residual(pose, P_.points[ob.point], ob.xy, L.r, &c)) continue;
+                // Whitened: residual and Jacobians divided by the observation's sigma.
+                const double ws = 1.0 / ob.sigma;
+                L.r[0] *= ws;
+                L.r[1] *= ws;
                 const double s = std::hypot(L.r[0], L.r[1]);
                 L.w = s <= h_ ? 1.0 : h_ / s;
-                const double iz = 1 / c.z;
-                const double du[3] = {iz, 0, -c.x * iz * iz};
-                const double dv[3] = {0, iz, -c.y * iz * iz};
+                const double iz = ws / c.z;
+                const double du[3] = {iz, 0, -c.x * iz / c.z};
+                const double dv[3] = {0, iz, -c.y * iz / c.z};
                 // Camera: X' = exp(omega) Xc + v  ->  dXc/domega = -[Xc]x, dXc/dv = I.
                 const Mat3 dXdw = skew(c) * -1.0;
                 for (int k = 0; k < 3; ++k) {
