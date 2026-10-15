@@ -274,7 +274,8 @@ int main(int argc, char** argv) {
                         st.globalBACameras, st.globalBAPoints, st.globalBA.initialRmsPx, st.globalBA.finalRmsPx,
                         st.globalBA.iterations, st.globalBA.outliers);
         }
-        const vg::MapQuality q = vg::evaluateMap(reconstructor.mapPoints(), reconstructor.keyframes());
+        std::printf("points:  %d triangulated, %d culled as unconfirmed\n", st.pointsCreated, st.pointsCulled);
+        const vg::MapQuality q =vg::evaluateMap(reconstructor.mapPoints(), reconstructor.keyframes());
         std::printf("quality: %d points: %.1f keyframes/point avg, %.0f%% seen by only 2; parallax median %.1f deg, "
                     "%.0f%% below 2 deg; surface variation median %.3f, %.0f%% scattered\n",
                     q.points, q.meanObservations, 100 * q.twoViewShare, q.medianParallaxDeg,

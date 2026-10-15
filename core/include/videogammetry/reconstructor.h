@@ -58,6 +58,8 @@ public:
         int localBAs = 0;
         double localBARmsBefore = 0, localBARmsAfter = 0;  // mean RMS reprojection error (px)
         int localBAOutliers = 0;                           // observations removed
+        int pointsCreated = 0;
+        int pointsCulled = 0;    // new points removed for lack of confirmation
         BAReport globalBA;                                 // set by finish()
         int globalBACameras = 0, globalBAPoints = 0;
     };
@@ -118,7 +120,14 @@ private:
     int solveAndRefine(const Pose& prior, const std::vector<int>& localPoints, std::vector<int>& pointOfKeypoint,
                        Pose& pose);
     std::vector<int> localPoints() const;
-    int triangulateBetween(Keyframe& older, Keyframe& newer);
+    int triangulateBetween(int older, int newer);  // keyframe indices
+    // Map bookkeeping: keyframe pointIds and point observations stay in sync.
+    int createPoint(MapPoint point, PointObservation a, PointObservation b);
+    void addObservation(int pointId, PointObservation obs);
+    void removeObservation(int pointId, PointObservation obs);  // the point goes bad below 2 views
+    void setBad(int pointId);
+    // Removes new points that later keyframes did not confirm.
+    void cullRecentPoints();
     double medianSceneDepth(const Keyframe& kf) const;
     // Bundle-adjusts keyframes [first, end) with all their points; keyframes
     // outside that also see those points are held fixed. Applies the result
@@ -160,6 +169,7 @@ private:
     // Current map, and the best (largest) finished map.
     std::vector<Keyframe> keyframes_;
     std::vector<MapPoint> points_;
+    std::vector<int> recentPoints_;  // points still on probation
     std::vector<MapPoint> bestPoints_;
     std::vector<Vec3> bestTrajectory_;
 };

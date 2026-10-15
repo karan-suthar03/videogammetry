@@ -9,13 +9,20 @@
 
 namespace vg {
 
+// A keyframe's keypoint that sees a map point.
+struct PointObservation {
+    int keyframe = -1;
+    int keypoint = -1;
+};
+
 struct MapPoint {
     Vec3 position;          // world coordinates
     Descriptor descriptor;  // from the most recent observation
     int level = 0;          // pyramid level of that observation
     std::array<std::uint8_t, 3> color{255, 255, 255};
-    int observations = 0;   // keyframes that see this point
-    bool bad = false;       // rejected (e.g. by bundle adjustment); ignored everywhere
+    std::vector<PointObservation> observations;  // one per keyframe that sees it
+    int firstKeyframe = 0;  // keyframe whose insertion created it
+    bool bad = false;       // rejected; detached from all keyframes and ignored everywhere
 };
 
 struct Keyframe {
@@ -60,6 +67,13 @@ struct MappingParams {
     int localBAKeyframes = 10;    // keyframes refined after each new keyframe (0 = off)
     int localBAIterations = 10;
     int globalBAIterations = 20;  // full refinement in finish() (0 = off)
+
+    // Culling of new points: a point must be seen by at least
+    // `minConfirmingKeyframes` keyframes once `probationKeyframes` more
+    // keyframes have been added since its creation, or it is removed (a
+    // triangulation from one keyframe pair is unconfirmed: often a mismatch).
+    int probationKeyframes = 2;
+    int minConfirmingKeyframes = 3;
 };
 
 }  // namespace vg

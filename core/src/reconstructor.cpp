@@ -177,27 +177,25 @@ void Reconstructor::tryInitialize() {
     k2.colors = current.colors;
     k2.pointIds.assign(k2.keypoints.size(), -1);
 
+    recentPoints_.clear();
+    keyframes_.push_back(std::move(k1));
+    keyframes_.push_back(std::move(k2));
     for (std::size_t i = 0; i < matches.size(); ++i) {
         if (!good[i]) continue;
         MapPoint p;
         p.position = X[i] * s;
-        p.descriptor = k2.descriptors[matches[i].query];
-        p.level = k2.keypoints[matches[i].query].level;
-        p.color = k1.colors[matches[i].train];
-        p.observations = 2;
-        const int id = static_cast<int>(points_.size());
-        points_.push_back(p);
-        k1.pointIds[matches[i].train] = id;
-        k2.pointIds[matches[i].query] = id;
+        p.descriptor = keyframes_[1].descriptors[matches[i].query];
+        p.level = keyframes_[1].keypoints[matches[i].query].level;
+        p.color = keyframes_[0].colors[matches[i].train];
+        p.firstKeyframe = 1;
+        createPoint(std::move(p), {0, matches[i].train}, {1, matches[i].query});
     }
 
-    pose_ = k2.pose;
-    previousPose_ = k2.pose;
+    pose_ = keyframes_[1].pose;
+    previousPose_ = pose_;
     hasVelocity_ = false;  // the pair may span many frames; no per-frame velocity yet
-    trackedPoints_ = k2.pointIds;
+    trackedPoints_ = keyframes_[1].pointIds;
     trackedCount_ = static_cast<int>(depths.size());
-    keyframes_.push_back(std::move(k1));
-    keyframes_.push_back(std::move(k2));
     lastKeyframeFrame_ = current.index;
     lastWasKeyframe_ = true;
     reference_ = FrameData{};
@@ -389,18 +387,21 @@ void Reconstructor::addKeyframe() {
     kf.keypoints = keypoints_;
     kf.descriptors = descriptors_;
     kf.colors = colors_;
-    kf.pointIds = trackedPoints_;
-    for (std::size_t k = 0; k < kf.pointIds.size(); ++k) {
-        const int id = kf.pointIds[k];
-        if (id < 0) continue;
-        MapPoint& p = points_[id];
-        ++p.observations;
-        p.descriptor = kf.descriptors[k];  // keep the newest view's appearance
-        p.level = kf.keypoints[k].level;
-    }
+    kf.pointIds.assign(kf.keypoints.size(), -1);
+    const int newIndex = static_cast<int>(keyframes_.size());
     keyframes_.push_back(std::move(kf));
+    for (std::size_t k = 0; k < trackedPoints_.size(); ++k) {
+        const int id = trackedPoints_[k];
+        if (id < 0 || points_[id].bad) continue;
+        addObservation(id, {newIndex, static_cast<int>(k)});
+        MapPoint& p = points_[id];
+        p.descriptor = keyframes_[newIndex].descriptors[k];  // keep the newest view's appearance
+        p.level = keyframes_[newIndex].keypoints[k].level;
+    }
     lastKeyframeFrame_ = static_cast<long>(frameCount_);
     lastWasKeyframe_ = true;
+
+    cullRecentPoints();
 
     // Triangulation partners: the most recent keyframes whose baseline relative
     // to the scene depth gives enough parallax (newest first, as collected).
@@ -416,7 +417,7 @@ void Reconstructor::addKeyframe() {
     }
     // Most recent qualifying keyframes first: enough parallax, most shared view.
     if (static_cast<int>(partners.size()) > mp.triangulationKeyframes) partners.resize(mp.triangulationKeyframes);
-    for (const auto& [ratio, k] : partners) triangulateBetween(keyframes_[k], keyframes_[n - 1]);
+    for (const auto& [ratio, k] : partners) triangulateBetween(k, n - 1);
 
     if (mp.localBAKeyframes > 0) {
         const BAReport r = adjust(std::max(0, n - mp.localBAKeyframes), mp.localBAIterations);
@@ -504,12 +505,67 @@ BAReport Reconstructor::adjust(int firstKeyframe, int iterations) {
     for (std::size_t j = 0; j < pointIds.size(); ++j) points_[pointIds[j]].position = problem.points[j];
     for (std::size_t o = 0; o < obsRef.size(); ++o) {
         if (report.inlier[o]) continue;
-        Keyframe& kf = keyframes_[obsRef[o].keyframe];
-        const int id = kf.pointIds[obsRef[o].keypoint];
-        kf.pointIds[obsRef[o].keypoint] = -1;
-        if (--points_[id].observations < 2) points_[id].bad = true;
+        const int id = keyframes_[obsRef[o].keyframe].pointIds[obsRef[o].keypoint];
+        if (id >= 0) removeObservation(id, {obsRef[o].keyframe, obsRef[o].keypoint});
     }
     return report;
+}
+
+int Reconstructor::createPoint(MapPoint point, PointObservation a, PointObservation b) {
+    const int id = static_cast<int>(points_.size());
+    point.observations.clear();
+    points_.push_back(std::move(point));
+    addObservation(id, a);
+    addObservation(id, b);
+    recentPoints_.push_back(id);
+    ++stats_.pointsCreated;
+    return id;
+}
+
+void Reconstructor::addObservation(int pointId, PointObservation obs) {
+    keyframes_[obs.keyframe].pointIds[obs.keypoint] = pointId;
+    points_[pointId].observations.push_back(obs);
+}
+
+void Reconstructor::removeObservation(int pointId, PointObservation obs) {
+    MapPoint& p = points_[pointId];
+    int& slot = keyframes_[obs.keyframe].pointIds[obs.keypoint];
+    if (slot == pointId) slot = -1;
+    const auto it = std::find_if(p.observations.begin(), p.observations.end(), [&](const PointObservation& o) {
+        return o.keyframe == obs.keyframe && o.keypoint == obs.keypoint;
+    });
+    if (it != p.observations.end()) p.observations.erase(it);
+    if (p.observations.size() < 2) setBad(pointId);
+}
+
+void Reconstructor::setBad(int pointId) {
+    MapPoint& p = points_[pointId];
+    for (const PointObservation& o : p.observations) {
+        int& slot = keyframes_[o.keyframe].pointIds[o.keypoint];
+        if (slot == pointId) slot = -1;
+    }
+    p.observations.clear();
+    p.bad = true;
+}
+
+void Reconstructor::cullRecentPoints() {
+    const MappingParams& mp = options_.mapping;
+    const int newest = static_cast<int>(keyframes_.size()) - 1;
+    std::size_t kept = 0;
+    for (int id : recentPoints_) {
+        MapPoint& p = points_[id];
+        if (p.bad) continue;
+        const int age = newest - p.firstKeyframe;
+        if (age >= mp.probationKeyframes) {
+            if (static_cast<int>(p.observations.size()) < mp.minConfirmingKeyframes) {
+                setBad(id);
+                ++stats_.pointsCulled;
+            }
+            continue;  // decided: off probation
+        }
+        recentPoints_[kept++] = id;
+    }
+    recentPoints_.resize(kept);
 }
 
 void Reconstructor::finish() {
@@ -522,7 +578,9 @@ void Reconstructor::finish() {
                                                            [](const MapPoint& p) { return !p.bad; }));
 }
 
-int Reconstructor::triangulateBetween(Keyframe& older, Keyframe& newer) {
+int Reconstructor::triangulateBetween(int olderIndex, int newerIndex) {
+    const Keyframe& older = keyframes_[olderIndex];
+    const Keyframe& newer = keyframes_[newerIndex];
     const MappingParams& mp = options_.mapping;
     const double fx = intrinsics_.fx;
 
@@ -575,11 +633,8 @@ int Reconstructor::triangulateBetween(Keyframe& older, Keyframe& newer) {
         p.descriptor = newer.descriptors[b];
         p.level = newer.keypoints[b].level;
         p.color = newer.colors[b];
-        p.observations = 2;
-        const int id = static_cast<int>(points_.size());
-        points_.push_back(p);
-        older.pointIds[a] = id;
-        newer.pointIds[b] = id;
+        p.firstKeyframe = newerIndex;
+        createPoint(std::move(p), {olderIndex, a}, {newerIndex, b});
         ++created;
     }
     return created;
@@ -593,6 +648,7 @@ void Reconstructor::startNewMap() {
     }
     keyframes_.clear();
     points_.clear();
+    recentPoints_.clear();
     reference_ = FrameData{};
     state_ = State::Initializing;
     hasVelocity_ = false;
