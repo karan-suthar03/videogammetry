@@ -6,6 +6,9 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.graphics.Bitmap;
+import android.Manifest;
+import android.content.pm.PackageManager;
+import android.media.Image;
 import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.os.Bundle;
@@ -36,12 +39,13 @@ import java.util.Locale;
 public class MainActivity extends Activity {
 
     private static final int PICK_VIDEO = 1;
+    private static final int CAMERA_PERMISSION = 2;
     private static final int BATCH = 8;  // frames decoded per call
 
     private final Settings settings = new Settings();
     private SharedPreferences prefs;
     private LinearLayout settingsPanel;
-    private Button pickButton, stopButton;
+    private Button pickButton, stopButton, cameraButton;
     private TextView statusText;
     private PointCloudView cloudView;
     private volatile boolean busy = false, stopRequested = false;
@@ -83,6 +87,10 @@ public class MainActivity extends Activity {
         settingsButton.setText("Settings");
         settingsButton.setOnClickListener(v ->
                 settingsPanel.setVisibility(settingsPanel.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
+        cameraButton = new Button(this);
+        cameraButton.setText("Live camera");
+        cameraButton.setOnClickListener(v -> startCamera());
+        buttons.addView(cameraButton);
         buttons.addView(pickButton);
         buttons.addView(stopButton);
         buttons.addView(settingsButton);
@@ -90,7 +98,9 @@ public class MainActivity extends Activity {
 
         statusText = new TextView(this);
         statusText.setTextSize(12);
-        statusText.setText("Tune the settings, then pick a video.\nThe .ply is saved to Downloads/Videogammetry.");
+        statusText.setText("Tune the settings, then start the live camera (or pick a video).\n"
+                + "The camera image is not shown, only the 3D reconstruction from the camera's view.\n"
+                + "The .ply is saved to Downloads/Videogammetry.");
         root.addView(statusText);
 
         cloudView = new PointCloudView(this);
@@ -213,6 +223,133 @@ public class MainActivity extends Activity {
         p.addView(reset);
     }
 
+    private void startCamera() {
+        if (busy) return;
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {Manifest.permission.CAMERA}, CAMERA_PERMISSION);
+            return;
+        }
+        beginRun();
+        new Thread(this::processCamera, "reconstruction").start();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        if (requestCode == CAMERA_PERMISSION && results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
+            startCamera();
+        } else if (requestCode == CAMERA_PERMISSION) {
+            show("Camera permission is needed for the live mode.");
+        }
+    }
+
+    private void beginRun() {
+        busy = true;
+        stopRequested = false;
+        pickButton.setEnabled(false);
+        cameraButton.setEnabled(false);
+        stopButton.setEnabled(true);
+        settingsPanel.setVisibility(View.GONE);
+        cloudView.clear();
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    }
+
+    private void endRun() {
+        runOnUiThread(() -> {
+            busy = false;
+            pickButton.setEnabled(true);
+            cameraButton.setEnabled(true);
+            stopButton.setEnabled(false);
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        });
+    }
+
+    // Live camera: always takes the newest frame when the reconstruction is
+    // free; frames that arrive meanwhile are dropped (no queue, no lag).
+    private void processCamera() {
+        long session = 0;
+        CameraStream camera = new CameraStream(this);
+        try {
+            int processSize = settings.processSize > 0 ? settings.processSize : 1920;
+            if (!camera.choose(processSize)) throw new IllegalStateException("no back camera");
+            float fov = camera.fovDeg > 20 && camera.fovDeg < 150 ? camera.fovDeg : settings.fovDeg;
+            float[] floats = settings.toFloats();
+            floats[0] = fov;
+            session = NativeBridge.create(settings.toInts(), floats);
+            cloudView.setImageRotation(camera.sensorOrientation);
+            camera.start();
+
+            long start = SystemClock.elapsedRealtime(), lastView = 0, lastStatus = 0, processMs = 0;
+            int processed = 0;
+            while (!stopRequested) {
+                if (camera.error() != null) throw new IllegalStateException(camera.error());
+                Image image = camera.latest();
+                if (image == null) {
+                    SystemClock.sleep(2);
+                    continue;
+                }
+                long t0 = SystemClock.elapsedRealtime();
+                Image.Plane[] planes = image.getPlanes();
+                NativeBridge.addFrameYuv(session, planes[0].getBuffer(), planes[1].getBuffer(), planes[2].getBuffer(),
+                        image.getWidth(), image.getHeight(), planes[0].getRowStride(), planes[1].getRowStride(),
+                        planes[1].getPixelStride(), processSize, image.getTimestamp() * 1e-9);
+                image.close();
+                processMs += SystemClock.elapsedRealtime() - t0;
+                ++processed;
+
+                long now = SystemClock.elapsedRealtime();
+                if (settings.liveView && now - lastView >= 1000 / Math.max(1, settings.viewFps)) {
+                    Bitmap target = cloudView.backBuffer(true);
+                    if (target != null) {
+                        NativeBridge.renderView(session, target, settings.pointSize, settings.highlightTracked);
+                        cloudView.swap();
+                    }
+                    lastView = now;
+                }
+                if (now - lastStatus >= 250) {
+                    double seconds = Math.max((now - start) / 1000.0, 1e-3);
+                    long delivered = camera.delivered();
+                    show(String.format(Locale.US,
+                            "Live camera %dx%d, starting FOV %.1f deg%s\n"
+                                    + "camera %.1f fps, processed %.1f fps (%.1f ms each), skipped %d\n%s",
+                            camera.size.getWidth(), camera.size.getHeight(), fov,
+                            camera.fovDeg > 0 ? " (from camera)" : " (setting)",
+                            delivered / seconds, processed / seconds, (double) processMs / Math.max(1, processed),
+                            Math.max(0, delivered - processed), NativeBridge.status(session)));
+                    lastStatus = now;
+                }
+            }
+            camera.stop();
+            saveResult(session, "camera_" + new java.text.SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+                    .format(new java.util.Date()), start);
+        } catch (Exception e) {
+            show("Error: " + e.getMessage());
+        } finally {
+            camera.stop();
+            if (session != 0) NativeBridge.destroy(session);
+            endRun();
+        }
+    }
+
+    // Final global BA, last view, .ply into Downloads/Videogammetry.
+    private void saveResult(long session, String baseName, long start) throws Exception {
+        show("Refining the whole map (bundle adjustment)...\n" + NativeBridge.status(session));
+        NativeBridge.finish(session);
+        Bitmap target = cloudView.backBuffer(true);
+        if (target != null) {
+            NativeBridge.renderView(session, target, settings.pointSize, false);
+            cloudView.swap();
+        }
+        File tmp = new File(getCacheDir(), "cloud.ply");
+        int points = NativeBridge.writePly(session, tmp.getAbsolutePath());
+        if (points < 0) throw new IllegalStateException("could not write the point cloud");
+        String outName = baseName + "_cloud.ply";
+        saveToDownloads(tmp, outName);
+        tmp.delete();
+        double seconds = (SystemClock.elapsedRealtime() - start) / 1000.0;
+        show(String.format(Locale.US, "Done after %.1f s: %d points\nSaved to Downloads/Videogammetry/%s\n%s",
+                seconds, points, outName, NativeBridge.status(session)));
+    }
+
     private void pickVideo() {
         if (busy) return;
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -226,13 +363,8 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != PICK_VIDEO || resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
-        busy = true;
-        stopRequested = false;
-        pickButton.setEnabled(false);
-        stopButton.setEnabled(true);
-        settingsPanel.setVisibility(View.GONE);
-        cloudView.clear();
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        beginRun();
+        cloudView.setImageRotation(0);
         new Thread(() -> process(uri), "reconstruction").start();
     }
 
@@ -292,24 +424,7 @@ public class MainActivity extends Activity {
                 }
             }
 
-            show("Refining the whole map (bundle adjustment)...\n" + NativeBridge.status(session));
-            NativeBridge.finish(session);
-            Bitmap target = cloudView.backBuffer(true);
-            if (target != null) {
-                NativeBridge.renderView(session, target, settings.pointSize, false);
-                cloudView.swap();
-            }
-
-            File tmp = new File(getCacheDir(), "cloud.ply");
-            int points = NativeBridge.writePly(session, tmp.getAbsolutePath());
-            if (points < 0) throw new IllegalStateException("could not write the point cloud");
-            String outName = stripExtension(name) + "_cloud.ply";
-            saveToDownloads(tmp, outName);
-            tmp.delete();
-
-            double seconds = (SystemClock.elapsedRealtime() - start) / 1000.0;
-            show(String.format(Locale.US, "%s in %.1f s: %d points\nSaved to Downloads/Videogammetry/%s\n%s",
-                    stopRequested ? "Stopped" : "Done", seconds, points, outName, NativeBridge.status(session)));
+            saveResult(session, stripExtension(name), start);
         } catch (Exception e) {
             show("Error: " + e.getMessage());
         } finally {
@@ -318,12 +433,7 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {
             }
             if (session != 0) NativeBridge.destroy(session);
-            runOnUiThread(() -> {
-                busy = false;
-                pickButton.setEnabled(true);
-                stopButton.setEnabled(false);
-                getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-            });
+            endRun();
         }
     }
 

@@ -26,6 +26,7 @@ struct Session {
     vg::Reconstructor reconstructor;
     long frames = 0;
     std::vector<float> depth;  // z-buffer of the live view
+    std::vector<std::uint8_t> rgb;  // converted camera frame
 };
 
 Session* session(jlong handle) { return reinterpret_cast<Session*>(handle); }
@@ -115,6 +116,54 @@ JNIEXPORT jboolean JNICALL Java_com_videogammetry_NativeBridge_addFrame(JNIEnv* 
     ++s->frames;
 
     AndroidBitmap_unlockPixels(env, bitmap);
+    return JNI_TRUE;
+}
+
+// Adds one camera frame given as YUV_420_888 planes (direct ByteBuffers from
+// android.media.Image). Converted to RGB natively, subsampled by an integer
+// factor so the long side is not much above the process size (no full-size
+// conversion when processing small).
+JNIEXPORT jboolean JNICALL Java_com_videogammetry_NativeBridge_addFrameYuv(
+    JNIEnv* env, jclass, jlong handle, jobject yBuf, jobject uBuf, jobject vBuf, jint width, jint height,
+    jint yRowStride, jint uvRowStride, jint uvPixelStride, jint processSize, jdouble timestamp) {
+    auto* Y = static_cast<const std::uint8_t*>(env->GetDirectBufferAddress(yBuf));
+    auto* U = static_cast<const std::uint8_t*>(env->GetDirectBufferAddress(uBuf));
+    auto* V = static_cast<const std::uint8_t*>(env->GetDirectBufferAddress(vBuf));
+    if (!Y || !U || !V || width <= 0 || height <= 0) return JNI_FALSE;
+    const int longSide = std::max(width, height);
+    const int step = processSize > 0 ? std::max(1, longSide / processSize) : 1;
+    const int w = width / step, h = height / step;
+    Session* s = session(handle);
+    s->rgb.resize(static_cast<std::size_t>(w) * h * 3);
+    for (int y = 0; y < h; ++y) {
+        const int sy = y * step;
+        const std::uint8_t* yRow = Y + static_cast<std::size_t>(sy) * yRowStride;
+        const std::uint8_t* uRow = U + static_cast<std::size_t>(sy / 2) * uvRowStride;
+        const std::uint8_t* vRow = V + static_cast<std::size_t>(sy / 2) * uvRowStride;
+        std::uint8_t* out = s->rgb.data() + static_cast<std::size_t>(y) * w * 3;
+        for (int x = 0; x < w; ++x) {
+            const int sx = x * step;
+            const int yy = yRow[sx];
+            const int uu = uRow[(sx / 2) * uvPixelStride] - 128;
+            const int vv = vRow[(sx / 2) * uvPixelStride] - 128;
+            // Full-range BT.601 (JFIF), fixed point.
+            const int r = yy + ((91881 * vv) >> 16);
+            const int g = yy - ((22554 * uu + 46802 * vv) >> 16);
+            const int b = yy + ((116130 * uu) >> 16);
+            out[3 * x] = static_cast<std::uint8_t>(std::clamp(r, 0, 255));
+            out[3 * x + 1] = static_cast<std::uint8_t>(std::clamp(g, 0, 255));
+            out[3 * x + 2] = static_cast<std::uint8_t>(std::clamp(b, 0, 255));
+        }
+    }
+    vg::FrameView frame;
+    frame.data = s->rgb.data();
+    frame.width = w;
+    frame.height = h;
+    frame.stride = w * 3;
+    frame.format = vg::FrameView::Format::RGB8;
+    frame.timestamp = timestamp;
+    s->reconstructor.addFrame(frame);
+    ++s->frames;
     return JNI_TRUE;
 }
 

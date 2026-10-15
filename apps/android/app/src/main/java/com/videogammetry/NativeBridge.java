@@ -23,6 +23,13 @@ public final class NativeBridge {
     // Bitmap must be ARGB_8888.
     public static native boolean addFrame(long session, Bitmap frame, double timestampSec);
 
+    // Camera frame as YUV_420_888 planes (direct buffers from android.media.Image);
+    // subsampled natively toward processSize (long side).
+    public static native boolean addFrameYuv(long session, java.nio.ByteBuffer y, java.nio.ByteBuffer u,
+                                             java.nio.ByteBuffer v, int width, int height, int yRowStride,
+                                             int uvRowStride, int uvPixelStride, int processSize,
+                                             double timestampSec);
+
     // Draws the point cloud from the current camera into an ARGB_8888 bitmap;
     // returns the number of points drawn.
     public static native int renderView(long session, Bitmap target, int pointSize, boolean highlightTracked);
