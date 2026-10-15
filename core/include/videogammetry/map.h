@@ -41,7 +41,12 @@ struct MappingParams {
     int maxReferenceAge = 60;  // frames before the initialization reference is replaced
 
     // Tracking against the map (any motion: uses 2D-3D matches, no parallax needed).
-    int localKeyframes = 20;         // map points of this many recent keyframes are projected
+    // The local map is chosen by covisibility (keyframes sharing points), not
+    // by time: the keyframes that see the points tracked in the last frame,
+    // then up to `covisibleNeighbours` best covisible keyframes of each, at
+    // most `localKeyframes` in all. Their map points are projected.
+    int localKeyframes = 30;
+    int covisibleNeighbours = 10;
     float projectionRadiusPx = 15;   // search radius around projected map points
     float wideRadiusPx = 60;         // retry radius when few matches (fast motion)
     int minTrackedPoints = 30;
@@ -56,9 +61,9 @@ struct MappingParams {
     double minTriangulationAngleDeg = 1.0;
     double maxReprojectionErrorPx = 2.0;
     // New points are triangulated against earlier keyframes with enough
-    // baseline: among the last `triangulationSearch` keyframes, up to
-    // `triangulationKeyframes` most recent ones whose baseline / median scene
-    // depth is at least `minBaselineRatio` (enough parallax, most shared view).
+    // baseline: among the `triangulationSearch` keyframes sharing the most
+    // points with the new one, up to `triangulationKeyframes` (most shared
+    // first) whose baseline / median scene depth is at least `minBaselineRatio`.
     int triangulationKeyframes = 4;
     int triangulationSearch = 15;
     double minBaselineRatio = 0.02;
@@ -70,7 +75,7 @@ struct MappingParams {
     float triangulationRatio = 0.8f;
 
     // Bundle adjustment.
-    int localBAKeyframes = 10;    // keyframes refined after each new keyframe (0 = off)
+    int localBAKeyframes = 10;    // refined after each new keyframe: it and its most covisible ones (0 = off)
     int localBAIterations = 10;
     int globalBAIterations = 20;  // full refinement in finish() (0 = off)
 

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "videogammetry/features.h"
@@ -119,6 +120,11 @@ private:
                            std::vector<int>& pointOfKeypoint) const;
     int solveAndRefine(const Pose& prior, const std::vector<int>& localPoints, std::vector<int>& pointOfKeypoint,
                        Pose& pose);
+    // Keyframes sharing points with keyframe k: (keyframe, shared points),
+    // most shared first.
+    std::vector<std::pair<int, int>> covisibleKeyframes(int k) const;
+    // Local map for tracking: keyframes covisible with the last frame, and their points.
+    std::vector<int> localKeyframes() const;
     std::vector<int> localPoints() const;
     int triangulateBetween(int older, int newer);  // keyframe indices
     // Map bookkeeping: keyframe pointIds and point observations stay in sync.
@@ -129,10 +135,10 @@ private:
     // Removes new points that later keyframes did not confirm.
     void cullRecentPoints();
     double medianSceneDepth(const Keyframe& kf) const;
-    // Bundle-adjusts keyframes [first, end) with all their points; keyframes
-    // outside that also see those points are held fixed. Applies the result
-    // and removes rejected observations.
-    BAReport adjust(int firstKeyframe, int iterations);
+    // Bundle-adjusts the given keyframes with all their points; other
+    // keyframes that see those points are held fixed. Applies the result and
+    // removes rejected observations.
+    BAReport adjust(const std::vector<int>& keyframes, int iterations);
     void startNewMap();
 
     Options options_;
@@ -152,6 +158,7 @@ private:
     std::vector<Descriptor> descriptors_;
     std::vector<std::array<std::uint8_t, 3>> colors_;
     std::vector<int> trackedPoints_;
+    std::vector<int> previousTracked_;  // map point ids tracked in the previous frame
     int trackedCount_ = 0;
     Pose pose_;
     bool lastWasKeyframe_ = false;

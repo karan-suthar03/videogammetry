@@ -56,6 +56,10 @@ void Reconstructor::addFeatures(FrameFeatures&& features) {
     descriptors_ = std::move(features.descriptors);
     colors_ = std::move(features.colors);
 
+    previousTracked_.clear();
+    for (int id : trackedPoints_) {
+        if (id >= 0) previousTracked_.push_back(id);
+    }
     trackedPoints_.assign(keypoints_.size(), -1);
     trackedCount_ = 0;
     lastWasKeyframe_ = false;
@@ -204,11 +208,75 @@ void Reconstructor::tryInitialize() {
     ++stats_.maps;
 }
 
+std::vector<std::pair<int, int>> Reconstructor::covisibleKeyframes(int k) const {
+    std::vector<int> shared(keyframes_.size(), 0);
+    std::vector<int> touched;
+    for (int id : keyframes_[k].pointIds) {
+        if (id < 0) continue;
+        for (const PointObservation& o : points_[id].observations) {
+            if (o.keyframe == k) continue;
+            if (shared[o.keyframe]++ == 0) touched.push_back(o.keyframe);
+        }
+    }
+    std::vector<std::pair<int, int>> result;
+    result.reserve(touched.size());
+    for (int other : touched) result.push_back({other, shared[other]});
+    // Most shared first; ties: the more recent keyframe.
+    std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
+        return a.second != b.second ? a.second > b.second : a.first > b.first;
+    });
+    return result;
+}
+
+std::vector<int> Reconstructor::localKeyframes() const {
+    const MappingParams& mp = options_.mapping;
+    const int nk = static_cast<int>(keyframes_.size());
+    std::vector<int> result;
+    if (nk == 0) return result;
+    std::vector<char> chosen(static_cast<std::size_t>(nk), 0);
+    const auto add = [&](int k) {
+        if (!chosen[k] && static_cast<int>(result.size()) < mp.localKeyframes) {
+            chosen[k] = 1;
+            result.push_back(k);
+        }
+    };
+
+    // 1. Keyframes that see the points tracked in the previous frame, by
+    //    number of those points they see.
+    std::vector<int> votes(static_cast<std::size_t>(nk), 0);
+    for (int id : previousTracked_) {
+        if (id < 0 || id >= static_cast<int>(points_.size()) || points_[id].bad) continue;
+        for (const PointObservation& o : points_[id].observations) ++votes[o.keyframe];
+    }
+    std::vector<std::pair<int, int>> seeing;  // (votes, keyframe)
+    for (int k = 0; k < nk; ++k) {
+        if (votes[k] > 0) seeing.push_back({votes[k], k});
+    }
+    std::sort(seeing.begin(), seeing.end(), [](const auto& a, const auto& b) {
+        return a.first != b.first ? a.first > b.first : a.second > b.second;
+    });
+    add(nk - 1);  // the newest keyframe always
+    for (const auto& [v, k] : seeing) add(k);
+
+    // 2. Their best covisible neighbours (strongest first); after a tracking
+    //    loss, the newest keyframe's.
+    std::vector<int> seeds;
+    for (const auto& [v, k] : seeing) seeds.push_back(k);
+    if (seeds.empty()) seeds.push_back(nk - 1);
+    for (int k : seeds) {
+        if (static_cast<int>(result.size()) >= mp.localKeyframes) break;
+        const std::vector<std::pair<int, int>> covisible = covisibleKeyframes(k);
+        for (int i = 0; i < static_cast<int>(covisible.size()) && i < mp.covisibleNeighbours; ++i) {
+            add(covisible[i].first);
+        }
+    }
+    return result;
+}
+
 std::vector<int> Reconstructor::localPoints() const {
     std::vector<char> seen(points_.size(), 0);
     std::vector<int> ids;
-    const int first = std::max(0, static_cast<int>(keyframes_.size()) - options_.mapping.localKeyframes);
-    for (int k = static_cast<int>(keyframes_.size()) - 1; k >= first; --k) {
+    for (int k : localKeyframes()) {
         for (int id : keyframes_[k].pointIds) {
             if (id >= 0 && !seen[id] && !points_[id].bad) {
                 seen[id] = 1;
@@ -403,24 +471,33 @@ void Reconstructor::addKeyframe() {
 
     cullRecentPoints();
 
-    // Triangulation partners: the most recent keyframes whose baseline relative
-    // to the scene depth gives enough parallax (newest first, as collected).
+    // Triangulation partners: of the keyframes sharing the most points with
+    // the new one, those whose baseline relative to the scene depth gives
+    // enough parallax (most shared first).
     const MappingParams& mp = options_.mapping;
     const int n = static_cast<int>(keyframes_.size());
     const Keyframe& newest = keyframes_[n - 1];
     const double depth = medianSceneDepth(newest);
-    std::vector<std::pair<double, int>> partners;  // (baseline ratio, keyframe index)
-    for (int k = n - 2; k >= 0 && k >= n - 1 - mp.triangulationSearch; --k) {
+    const std::vector<std::pair<int, int>> covisible = covisibleKeyframes(n - 1);
+    std::vector<int> partners;
+    for (int i = 0; i < static_cast<int>(covisible.size()) && i < mp.triangulationSearch; ++i) {
+        const int k = covisible[i].first;
         const double baseline = norm(keyframes_[k].pose.center() - newest.pose.center());
         const double ratio = depth > 0 ? baseline / depth : 0.0;
-        if (ratio >= mp.minBaselineRatio) partners.push_back({ratio, k});
+        if (ratio >= mp.minBaselineRatio) partners.push_back(k);
+        if (static_cast<int>(partners.size()) >= mp.triangulationKeyframes) break;
     }
-    // Most recent qualifying keyframes first: enough parallax, most shared view.
-    if (static_cast<int>(partners.size()) > mp.triangulationKeyframes) partners.resize(mp.triangulationKeyframes);
-    for (const auto& [ratio, k] : partners) triangulateBetween(k, n - 1);
+    for (int k : partners) triangulateBetween(k, n - 1);
 
     if (mp.localBAKeyframes > 0) {
-        const BAReport r = adjust(std::max(0, n - mp.localBAKeyframes), mp.localBAIterations);
+        // The new keyframe and the keyframes sharing the most points with it
+        // (counted after triangulation, which adds shared points).
+        std::vector<int> local{n - 1};
+        for (const auto& [k, shared] : covisibleKeyframes(n - 1)) {
+            if (static_cast<int>(local.size()) >= mp.localBAKeyframes) break;
+            local.push_back(k);
+        }
+        const BAReport r = adjust(local, mp.localBAIterations);
         if (r.ok) {
             ++stats_.localBAs;
             stats_.localBARmsBefore += r.initialRmsPx;
@@ -444,14 +521,16 @@ double Reconstructor::medianSceneDepth(const Keyframe& kf) const {
     return medianOf(std::move(depths));
 }
 
-BAReport Reconstructor::adjust(int firstKeyframe, int iterations) {
+BAReport Reconstructor::adjust(const std::vector<int>& keyframes, int iterations) {
     const int nk = static_cast<int>(keyframes_.size());
-    if (nk < 2 || firstKeyframe >= nk) return {};
+    if (nk < 2 || keyframes.empty()) return {};
+    std::vector<char> variable(static_cast<std::size_t>(nk), 0);
+    for (int k : keyframes) variable[k] = 1;
 
     // Points seen by the keyframes being adjusted.
     std::vector<int> pointIndex(points_.size(), -1);
     std::vector<int> pointIds;
-    for (int k = firstKeyframe; k < nk; ++k) {
+    for (int k : keyframes) {
         for (int id : keyframes_[k].pointIds) {
             if (id >= 0 && !points_[id].bad && pointIndex[id] < 0) {
                 pointIndex[id] = static_cast<int>(pointIds.size());
@@ -461,7 +540,12 @@ BAReport Reconstructor::adjust(int firstKeyframe, int iterations) {
     }
     if (pointIds.empty()) return {};
 
-    // Cameras: the adjusted keyframes plus fixed ones that also see those points.
+    // Cameras: every keyframe that sees those points (the adjusted ones plus
+    // fixed neighbours), in keyframe order so the reduced system stays banded.
+    std::vector<char> involved(static_cast<std::size_t>(nk), 0);
+    for (int id : pointIds) {
+        for (const PointObservation& o : points_[id].observations) involved[o.keyframe] = 1;
+    }
     BAProblem problem;
     std::vector<int> cameraKeyframe;
     struct ObsRef {
@@ -469,22 +553,19 @@ BAReport Reconstructor::adjust(int firstKeyframe, int iterations) {
     };
     std::vector<ObsRef> obsRef;
     for (int k = 0; k < nk; ++k) {
-        const bool variable = k >= firstKeyframe;
+        if (!involved[k]) continue;
         const Keyframe& kf = keyframes_[k];
         const int camera = static_cast<int>(cameraKeyframe.size());
-        bool used = false;
         for (std::size_t i = 0; i < kf.pointIds.size(); ++i) {
             const int id = kf.pointIds[i];
             if (id < 0 || points_[id].bad || pointIndex[id] < 0) continue;
             problem.observations.push_back(
                 {camera, pointIndex[id], intrinsics_.normalize(kf.keypoints[i].x, kf.keypoints[i].y)});
             obsRef.push_back({k, static_cast<int>(i)});
-            used = true;
         }
-        if (!used) continue;
         cameraKeyframe.push_back(k);
         problem.poses.push_back(kf.pose);
-        problem.fixedPose.push_back(variable ? 0 : 1);
+        problem.fixedPose.push_back(variable[k] ? 0 : 1);
     }
     // Gauge: monocular maps are defined up to position, rotation and scale.
     // Without fixed neighbours, fix the two oldest keyframes.
@@ -572,7 +653,9 @@ void Reconstructor::finish() {
     const int iterations = options_.mapping.globalBAIterations;
     if (iterations <= 0 || keyframes_.size() < 2) return;
     auto t = profiler_.scope("global ba");
-    stats_.globalBA = adjust(0, iterations);
+    std::vector<int> all(keyframes_.size());
+    for (std::size_t k = 0; k < all.size(); ++k) all[k] = static_cast<int>(k);
+    stats_.globalBA = adjust(all, iterations);
     stats_.globalBACameras = static_cast<int>(keyframes_.size());
     stats_.globalBAPoints = static_cast<int>(std::count_if(points_.begin(), points_.end(),
                                                            [](const MapPoint& p) { return !p.bad; }));
