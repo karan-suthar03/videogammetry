@@ -350,7 +350,7 @@ void showUsage() {
     MessageBoxW(nullptr,
                 L"Usage: videogammetry_viewer [video] [options]\n\n"
                 L"  --fov <deg>     assumed field of view across the long side (default 65)\n"
-                L"  --size <px>     long side of the processed frame, 0 = full size (default 960)\n"
+                L"  --size <px>     long side of the processed frame, 0 = full size (default)\n"
                 L"  --max-speed     start at maximum speed instead of the video's frame rate\n\n"
                 L"Without a video, a file dialog opens.",
                 L"Videogammetry viewer", MB_OK | MB_ICONINFORMATION);

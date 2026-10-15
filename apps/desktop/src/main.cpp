@@ -28,7 +28,7 @@ void printUsage() {
         "Options:\n"
         "  -o <file.ply>               output point cloud (default: cloud.ply)\n"
         "  --trajectory <file.ply>     also write the keyframe camera positions\n"
-        "  --size <px>                 long side of the frame is downscaled to this, 0 = full resolution (default 960)\n"
+        "  --size <px>                 long side of the frame is downscaled to this, 0 = full resolution (default 0)\n"
         "  --threads <n>               worker threads for tracking/mapping, 0 = all hardware threads (default 0)\n"
         "  --extract-workers <n>       frames whose features are extracted in parallel, 0 = all hardware threads\n"
         "  --serial                    extract features inside the reconstructor, one frame at a time\n"

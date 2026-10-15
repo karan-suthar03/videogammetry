@@ -30,7 +30,7 @@ import java.util.Locale;
 public class MainActivity extends Activity {
 
     private static final int PICK_VIDEO = 1;
-    private static final int PROCESS_SIZE = 960;  // long side, as on desktop
+    private static final int PROCESS_SIZE = 960;  // long side; desktop uses full resolution, phones stay fast at 960
     private static final double FOV_DEG = 65.0;   // assumed, across the long side
     private static final int BATCH = 8;           // frames decoded per call
 
