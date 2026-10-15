@@ -61,6 +61,40 @@ def parse_log(log):
     return r
 
 
+def realtime(frames_csv, video_fps, queue=3):
+    """Live-capture view of the per-frame times on the tracking thread
+    (tracking + mapping; feature extraction runs ahead on other threads):
+    frames arrive every 1/fps; a camera keeps at most `queue` waiting frames
+    and drops new ones when full."""
+    import csv as _csv
+    costs = [float(r["track_ms"]) + float(r["mapping_ms"]) for r in _csv.DictReader(open(frames_csv))]
+    if not costs or not video_fps:
+        return {}
+    budget = 1000.0 / video_fps
+    s = sorted(costs)
+    pct = lambda q: s[min(len(s) - 1, int(q * len(s)))]
+    # Unbounded queue: latency; bounded queue: drops.
+    t_free, worst_latency = 0.0, 0.0
+    for i, c in enumerate(costs):
+        arrive = i * budget
+        start = max(arrive, t_free)
+        t_free = start + c
+        worst_latency = max(worst_latency, t_free - arrive)
+    waiting, t_free, dropped = [], 0.0, 0
+    for i, c in enumerate(costs):
+        arrive = i * budget
+        waiting = [t for t in waiting if t > arrive]  # finish times of frames still queued or running
+        if len(waiting) > queue:
+            dropped += 1
+            continue
+        start = max(arrive, t_free)
+        t_free = start + c
+        waiting.append(t_free)
+    return {"frame_ms_p50": pct(0.5), "frame_ms_p99": pct(0.99), "frame_ms_max": s[-1],
+            "over_budget_pct": 100.0 * sum(c > budget for c in costs) / len(costs),
+            "worst_latency_ms": worst_latency, "dropped": dropped, "budget_ms": budget}
+
+
 def run_once(cli, seq, extra, workdir):
     dump = os.path.join(workdir, seq["name"])
     cmd = [cli, os.path.join(ROOT, seq["video"]), "-o", os.path.join(workdir, seq["name"] + ".ply"),
@@ -71,6 +105,9 @@ def run_once(cli, seq, extra, workdir):
     r = parse_log(proc.stdout)
     r["wall_s"] = wall
     r["exit_code"] = proc.returncode
+    frames_csv = os.path.join(dump, "frames.csv")
+    if os.path.exists(frames_csv):
+        r.update(realtime(frames_csv, r["video_fps"]))
     if "reference" in seq:
         ref = os.path.join(ROOT, seq["reference"])
         images = os.path.join(ref, "images.txt")
@@ -93,7 +130,8 @@ def summarize(runs):
     s = {}
     for key in ("frames", "lost_frames", "maps", "tracked_per_frame", "keyframes", "points", "surface_variation",
                 "scattered_pct", "two_view_pct", "fov", "k1", "background_passes", "fps", "core_fps", "video_fps",
-                "wall_s", "reference_fov", "reference_k1"):
+                "wall_s", "reference_fov", "reference_k1", "frame_ms_p50", "frame_ms_p99", "frame_ms_max",
+                "over_budget_pct", "worst_latency_ms", "dropped", "budget_ms"):
         s[key] = median([r.get(key) for r in runs])
     for kind in ("final", "live"):
         for key in ("ate_rms_pct", "ate_max_pct", "scale_min", "scale_max", "rpe_direction_deg", "rpe_length_ratio"):
@@ -135,6 +173,14 @@ def print_table(results):
     print("\nfinal/live ATE: RMS camera position error vs COLMAP in % of the path extent (final keyframes / pose when "
           "tracked); scale: min-max of 20 s window scale (1.00 = no drift); dir: motion direction error over 1 s (deg); "
           "sv: surface variation (noise); fps: overall throughput\n")
+    print(f"{'real time':26s} {'frame ms p50/p99/max':>22s} {'budget':>7s} {'over':>6s} {'latency':>9s} {'dropped':>8s}")
+    for name, s in results.items():
+        if s.get("frame_ms_p50") is None:
+            continue
+        print(f"{name:26s} {s['frame_ms_p50']:6.1f}/{s['frame_ms_p99']:6.1f}/{s['frame_ms_max']:7.1f} "
+              f"{s['budget_ms']:6.1f}ms {s['over_budget_pct']:5.1f}% {s['worst_latency_ms']:7.0f}ms {s['dropped']:8.0f}")
+    print("(tracking thread per frame; over = frames slower than 1/fps; latency = worst wait with an unbounded "
+          "queue; dropped = live camera keeping at most 3 waiting frames)\n")
     names = sorted({n for s in results.values() for n in s["stage_avg_ms"]})
     print("stage avg ms/frame: " + "  ".join(
         f"{n}: " + "/".join(fmt(s["stage_avg_ms"].get(n), ".1f") for s in results.values()) for n in names))
