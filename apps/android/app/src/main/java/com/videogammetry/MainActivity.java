@@ -3,6 +3,7 @@ package com.videogammetry;
 import android.app.Activity;
 import android.content.ContentValues;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.media.MediaMetadataRetriever;
@@ -12,10 +13,15 @@ import android.os.Environment;
 import android.os.SystemClock;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
-import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.Button;
+import android.widget.CompoundButton;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.SeekBar;
+import android.widget.Switch;
 import android.widget.TextView;
 
 import java.io.File;
@@ -25,46 +31,186 @@ import java.io.OutputStream;
 import java.util.List;
 import java.util.Locale;
 
-// Debug app: pick a video, reconstruct a point cloud on the phone, and save
-// it as a .ply file in Downloads/Videogammetry.
+// Debug app: tune the settings, pick a video, watch the point cloud being
+// built from the camera's point of view, and get a .ply in Downloads/Videogammetry.
 public class MainActivity extends Activity {
 
     private static final int PICK_VIDEO = 1;
-    private static final int PROCESS_SIZE = 960;  // long side; desktop uses full resolution, phones stay fast at 960
-    private static final double FOV_DEG = 65.0;   // assumed, across the long side
-    private static final int BATCH = 8;           // frames decoded per call
+    private static final int BATCH = 8;  // frames decoded per call
 
-    private Button pickButton;
+    private final Settings settings = new Settings();
+    private SharedPreferences prefs;
+    private LinearLayout settingsPanel;
+    private Button pickButton, stopButton;
     private TextView statusText;
-    private volatile boolean busy = false;
+    private PointCloudView cloudView;
+    private volatile boolean busy = false, stopRequested = false;
+
+    private interface IntSetter { void set(int v); }
+    private interface BoolSetter { void set(boolean v); }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        prefs = getSharedPreferences("settings", MODE_PRIVATE);
+        settings.load(prefs);
+        buildUi();
+    }
 
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setGravity(Gravity.CENTER_HORIZONTAL);
-        int pad = (int) (24 * getResources().getDisplayMetrics().density);
-        layout.setPadding(pad, pad * 2, pad, pad);
+    private int dp(int v) {
+        return (int) (v * getResources().getDisplayMetrics().density);
+    }
+
+    private void buildUi() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(12), dp(24), dp(12), dp(12));
 
         TextView title = new TextView(this);
-        title.setTextSize(22);
+        title.setTextSize(20);
         title.setText("Videogammetry " + NativeBridge.version());
-        layout.addView(title);
+        root.addView(title);
 
+        LinearLayout buttons = new LinearLayout(this);
         pickButton = new Button(this);
         pickButton.setText("Pick video");
         pickButton.setOnClickListener(v -> pickVideo());
-        layout.addView(pickButton);
+        stopButton = new Button(this);
+        stopButton.setText("Stop");
+        stopButton.setEnabled(false);
+        stopButton.setOnClickListener(v -> stopRequested = true);
+        Button settingsButton = new Button(this);
+        settingsButton.setText("Settings");
+        settingsButton.setOnClickListener(v ->
+                settingsPanel.setVisibility(settingsPanel.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
+        buttons.addView(pickButton);
+        buttons.addView(stopButton);
+        buttons.addView(settingsButton);
+        root.addView(buttons);
 
         statusText = new TextView(this);
-        statusText.setTextSize(15);
-        statusText.setPadding(0, pad, 0, 0);
-        statusText.setText("Pick a video to build a point cloud.\nThe .ply is saved to Downloads/Videogammetry.");
-        layout.addView(statusText);
+        statusText.setTextSize(12);
+        statusText.setText("Tune the settings, then pick a video.\nThe .ply is saved to Downloads/Videogammetry.");
+        root.addView(statusText);
 
-        setContentView(layout);
+        cloudView = new PointCloudView(this);
+        root.addView(cloudView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        settingsPanel = new LinearLayout(this);
+        settingsPanel.setOrientation(LinearLayout.VERTICAL);
+        buildSettings(settingsPanel);
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(settingsPanel);
+        root.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.2f));
+        setContentView(root);
+    }
+
+    private void header(LinearLayout parent, String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextSize(15);
+        t.setPadding(0, dp(10), 0, dp(2));
+        parent.addView(t);
+    }
+
+    // Slider over `values` (shown with `labels`), starting at the value closest to `current`.
+    private void slider(LinearLayout parent, String name, String hint, int[] values, String[] labels, int current,
+                        IntSetter setter) {
+        TextView label = new TextView(this);
+        label.setTextSize(13);
+        SeekBar bar = new SeekBar(this);
+        bar.setMax(values.length - 1);
+        int start = 0;
+        for (int i = 0; i < values.length; ++i) {
+            if (Math.abs(values[i] - current) < Math.abs(values[start] - current)) start = i;
+        }
+        final int[] idx = {start};
+        Runnable show = () -> label.setText(name + ": " + labels[idx[0]] + "   (" + hint + ")");
+        bar.setProgress(start);
+        show.run();
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(SeekBar s, int p, boolean user) {
+                idx[0] = p;
+                setter.set(values[p]);
+                show.run();
+                settings.save(prefs);
+            }
+            public void onStartTrackingTouch(SeekBar s) {}
+            public void onStopTrackingTouch(SeekBar s) {}
+        });
+        parent.addView(label);
+        parent.addView(bar);
+    }
+
+    private void toggle(LinearLayout parent, String name, boolean current, BoolSetter setter) {
+        Switch s = new Switch(this);
+        s.setText(name);
+        s.setTextSize(13);
+        s.setChecked(current);
+        s.setOnCheckedChangeListener((CompoundButton b, boolean on) -> {
+            setter.set(on);
+            settings.save(prefs);
+        });
+        parent.addView(s);
+    }
+
+    private static String[] labels(int[] values, String suffix, String zeroLabel) {
+        String[] out = new String[values.length];
+        for (int i = 0; i < values.length; ++i) out[i] = values[i] == 0 && zeroLabel != null ? zeroLabel : values[i] + suffix;
+        return out;
+    }
+
+    private void buildSettings(LinearLayout p) {
+        header(p, "Processing (speed vs detail)");
+        int[] sizes = {480, 640, 800, 960, 1280, 0};
+        slider(p, "Process size", "smaller = faster", sizes, labels(sizes, " px", "full"), settings.processSize,
+                v -> settings.processSize = v);
+        int[] feats = {500, 800, 1000, 1500, 2000, 3000};
+        slider(p, "ORB features", "fewer = faster, less robust", feats, labels(feats, "", null), settings.maxFeatures,
+                v -> settings.maxFeatures = v);
+        int[] steps = {1, 2, 3, 4, 6};
+        slider(p, "Use every N-th frame", "higher = faster, needs slow motion", steps, labels(steps, "", null),
+                settings.frameStep, v -> settings.frameStep = v);
+        int cores = Runtime.getRuntime().availableProcessors();
+        int[] threads = {0, 1, 2, 4, 6, 8};
+        slider(p, "Threads", cores + " cores here", threads, labels(threads, "", "all"), settings.threads,
+                v -> settings.threads = v);
+        int[] fovs = {45, 55, 65, 75, 85, 95};
+        slider(p, "Starting field of view", "refined from the video if enabled", fovs, labels(fovs, " deg", null),
+                Math.round(settings.fovDeg), v -> settings.fovDeg = v);
+
+        header(p, "Mapping (accuracy vs cost)");
+        int[] baKfs = {0, 5, 8, 10, 15};
+        slider(p, "Local BA keyframes", "0 = off", baKfs, labels(baKfs, "", "off"), settings.localBAKeyframes,
+                v -> settings.localBAKeyframes = v);
+        int[] baIts = {3, 5, 10, 15};
+        slider(p, "Local BA iterations", "fewer = faster", baIts, labels(baIts, "", null), settings.localBAIterations,
+                v -> settings.localBAIterations = v);
+        toggle(p, "Background global BA (fixes old parts of the map)", settings.backgroundBA,
+                v -> settings.backgroundBA = v);
+        toggle(p, "Estimate field of view from the video", settings.refineFocal, v -> settings.refineFocal = v);
+        toggle(p, "Estimate lens distortion", settings.refineDistortion, v -> settings.refineDistortion = v);
+        toggle(p, "Fuse duplicate points (less drift, more cost)", settings.fusion, v -> settings.fusion = v);
+        toggle(p, "Keep only points confirmed by 3 views (less noise)", settings.confirmPoints,
+                v -> settings.confirmPoints = v);
+
+        header(p, "Live view");
+        toggle(p, "Show the point cloud while processing", settings.liveView, v -> settings.liveView = v);
+        int[] vfps = {5, 10, 15, 20, 30};
+        slider(p, "View updates", "per second", vfps, labels(vfps, " /s", null), settings.viewFps,
+                v -> settings.viewFps = v);
+        int[] ps = {1, 2, 3, 4, 6};
+        slider(p, "Point size", "pixels", ps, labels(ps, " px", null), settings.pointSize, v -> settings.pointSize = v);
+        toggle(p, "Tracked points in green", settings.highlightTracked, v -> settings.highlightTracked = v);
+
+        Button reset = new Button(this);
+        reset.setText("Reset to defaults");
+        reset.setOnClickListener(v -> {
+            settings.reset();
+            settings.save(prefs);
+            buildUi();
+        });
+        p.addView(reset);
     }
 
     private void pickVideo() {
@@ -81,7 +227,11 @@ public class MainActivity extends Activity {
         if (requestCode != PICK_VIDEO || resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
         busy = true;
+        stopRequested = false;
         pickButton.setEnabled(false);
+        stopButton.setEnabled(true);
+        settingsPanel.setVisibility(View.GONE);
+        cloudView.clear();
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         new Thread(() -> process(uri), "reconstruction").start();
     }
@@ -97,32 +247,58 @@ public class MainActivity extends Activity {
             double fps = durationMs > 0 ? frameCount * 1000.0 / durationMs : 30.0;
             String name = displayName(uri);
 
-            session = NativeBridge.create(PROCESS_SIZE, FOV_DEG);
+            session = NativeBridge.create(settings.toInts(), settings.toFloats());
             MediaMetadataRetriever.BitmapParams params = new MediaMetadataRetriever.BitmapParams();
             params.setPreferredConfig(Bitmap.Config.ARGB_8888);
 
-            long start = SystemClock.elapsedRealtime();
-            for (int first = 0; first < frameCount; first += BATCH) {
+            long start = SystemClock.elapsedRealtime(), lastView = 0, lastStatus = 0;
+            long processMs = 0;
+            int processed = 0;
+            for (int first = 0; first < frameCount && !stopRequested; first += BATCH) {
                 int count = Math.min(BATCH, frameCount - first);
                 List<Bitmap> frames = retriever.getFramesAtIndex(first, count, params);
                 for (int k = 0; k < frames.size(); ++k) {
                     Bitmap frame = frames.get(k);
-                    if (frame.getConfig() != Bitmap.Config.ARGB_8888) {
-                        Bitmap converted = frame.copy(Bitmap.Config.ARGB_8888, false);
-                        frame.recycle();
-                        frame = converted;
+                    int index = first + k;
+                    if (index % settings.frameStep == 0 && !stopRequested) {
+                        if (frame.getConfig() != Bitmap.Config.ARGB_8888) {
+                            Bitmap converted = frame.copy(Bitmap.Config.ARGB_8888, false);
+                            frame.recycle();
+                            frame = converted;
+                        }
+                        long t0 = SystemClock.elapsedRealtime();
+                        NativeBridge.addFrame(session, frame, index / fps);
+                        processMs += SystemClock.elapsedRealtime() - t0;
+                        ++processed;
                     }
-                    NativeBridge.addFrame(session, frame, (first + k) / fps);
                     frame.recycle();
                 }
-                double seconds = (SystemClock.elapsedRealtime() - start) / 1000.0;
-                int done = first + count;
-                show(String.format(Locale.US, "%s\nframe %d / %d  (%.1f fps)\n%s", name, done, frameCount,
-                        done / Math.max(seconds, 1e-3), NativeBridge.status(session)));
+                long now = SystemClock.elapsedRealtime();
+                if (settings.liveView && now - lastView >= 1000 / Math.max(1, settings.viewFps)) {
+                    Bitmap target = cloudView.backBuffer(true);
+                    if (target != null) {
+                        NativeBridge.renderView(session, target, settings.pointSize, settings.highlightTracked);
+                        cloudView.swap();
+                    }
+                    lastView = now;
+                }
+                if (now - lastStatus >= 250) {
+                    double seconds = (now - start) / 1000.0;
+                    int done = first + count;
+                    show(String.format(Locale.US, "%s  frame %d / %d\n%.1f fps overall, %.1f ms per processed frame\n%s",
+                            name, done, frameCount, done / Math.max(seconds, 1e-3),
+                            processed > 0 ? (double) processMs / processed : 0.0, NativeBridge.status(session)));
+                    lastStatus = now;
+                }
             }
 
             show("Refining the whole map (bundle adjustment)...\n" + NativeBridge.status(session));
             NativeBridge.finish(session);
+            Bitmap target = cloudView.backBuffer(true);
+            if (target != null) {
+                NativeBridge.renderView(session, target, settings.pointSize, false);
+                cloudView.swap();
+            }
 
             File tmp = new File(getCacheDir(), "cloud.ply");
             int points = NativeBridge.writePly(session, tmp.getAbsolutePath());
@@ -132,8 +308,8 @@ public class MainActivity extends Activity {
             tmp.delete();
 
             double seconds = (SystemClock.elapsedRealtime() - start) / 1000.0;
-            show(String.format(Locale.US, "Done in %.1f s: %d points\nSaved to Downloads/Videogammetry/%s\n%s",
-                    seconds, points, outName, NativeBridge.status(session)));
+            show(String.format(Locale.US, "%s in %.1f s: %d points\nSaved to Downloads/Videogammetry/%s\n%s",
+                    stopRequested ? "Stopped" : "Done", seconds, points, outName, NativeBridge.status(session)));
         } catch (Exception e) {
             show("Error: " + e.getMessage());
         } finally {
@@ -145,6 +321,7 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> {
                 busy = false;
                 pickButton.setEnabled(true);
+                stopButton.setEnabled(false);
                 getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             });
         }
