@@ -35,6 +35,73 @@ bool invert3(const Mat33& m, Mat33& inv) {
     return true;
 }
 
+// Symmetric positive-definite matrix stored by its lower skyline: row i keeps
+// columns [start(i), i]. Cholesky factorization stays inside that envelope (no
+// fill-in outside it), so the reduced camera system of a video -- keyframes
+// share points only with keyframes near them in time, a band -- costs
+// O(n * band^2) instead of O(n^3), with the same result as a dense solve.
+class SkylineMatrix {
+public:
+    // rowStart[i] <= i: first stored column of row i.
+    void reset(const std::vector<int>& rowStart) {
+        start_ = rowStart;
+        const std::size_t n = start_.size();
+        base_.resize(n);
+        std::size_t total = 0;
+        for (std::size_t i = 0; i < n; ++i) {
+            base_[i] = static_cast<std::ptrdiff_t>(total) - start_[i];  // element (i, j) at base_[i] + j
+            total += i - static_cast<std::size_t>(start_[i]) + 1;
+        }
+        data_.assign(total, 0.0);
+    }
+
+    int size() const { return static_cast<int>(start_.size()); }
+    int start(int i) const { return start_[i]; }
+    // Element (i, j), start(i) <= j <= i.
+    double& at(int i, int j) { return data_[static_cast<std::size_t>(base_[i] + j)]; }
+
+    // In place: A = L L^T. False if A is not positive definite.
+    bool factor() {
+        double* d = data_.data();
+        for (int i = 0; i < size(); ++i) {
+            double* li = d + base_[i];
+            for (int j = start_[i]; j <= i; ++j) {
+                const double* lj = d + base_[j];
+                double s = li[j];
+                for (int k = std::max(start_[i], start_[j]); k < j; ++k) s -= li[k] * lj[k];
+                if (j < i) {
+                    li[j] = s / lj[j];
+                } else {
+                    if (!(s > 0)) return false;
+                    li[i] = std::sqrt(s);
+                }
+            }
+        }
+        return true;
+    }
+
+    // Solves L L^T x = b in place (after factor()).
+    void solve(std::vector<double>& b) const {
+        const double* d = data_.data();
+        for (int i = 0; i < size(); ++i) {  // L y = b
+            const double* li = d + base_[i];
+            double s = b[i];
+            for (int k = start_[i]; k < i; ++k) s -= li[k] * b[k];
+            b[i] = s / li[i];
+        }
+        for (int i = size() - 1; i >= 0; --i) {  // L^T x = y, column by column
+            const double* li = d + base_[i];
+            b[i] /= li[i];
+            for (int k = start_[i]; k < i; ++k) b[k] -= li[k] * b[i];
+        }
+    }
+
+private:
+    std::vector<int> start_;
+    std::vector<std::ptrdiff_t> base_;
+    std::vector<double> data_;
+};
+
 Pose applyPoseDelta(const Pose& p, const double* d) {
     const Mat3 dR = rotationFromAxisAngle({d[0], d[1], d[2]});
     Pose out{dR * p.R, dR * p.t + Vec3{d[3], d[4], d[5]}};
@@ -56,6 +123,27 @@ public:
         for (int o = 0; o < static_cast<int>(P_.observations.size()); ++o) {
             cameraObs_[P_.observations[o].camera].push_back(o);
             pointObs_[P_.observations[o].point].push_back(o);
+        }
+
+        // Envelope of the reduced camera system: camera k couples with every
+        // camera that shares a point with it; row block k starts at the
+        // lowest such camera.
+        std::vector<int> firstCoupled(static_cast<std::size_t>(numVar_));
+        for (int k = 0; k < numVar_; ++k) firstCoupled[k] = k;
+        for (const std::vector<int>& obs : pointObs_) {
+            int lowest = numVar_;
+            for (int o : obs) {
+                const int k = varIndex_[P_.observations[o].camera];
+                if (k >= 0) lowest = std::min(lowest, k);
+            }
+            for (int o : obs) {
+                const int k = varIndex_[P_.observations[o].camera];
+                if (k >= 0) firstCoupled[k] = std::min(firstCoupled[k], lowest);
+            }
+        }
+        rowStart_.resize(static_cast<std::size_t>(6 * numVar_));
+        for (int k = 0; k < numVar_; ++k) {
+            for (int a = 0; a < 6; ++a) rowStart_[k * 6 + a] = 6 * firstCoupled[k];
         }
     }
 
@@ -269,18 +357,20 @@ private:
             }
         });
 
-        // Reduced camera system S dc = b. Each camera's block row is written by
-        // one task only, so the parallel build is race-free and deterministic.
-        std::vector<double> S(static_cast<std::size_t>(n) * n, 0.0), b(static_cast<std::size_t>(n), 0.0);
+        // Reduced camera system S dc = b, lower triangle only (S is symmetric).
+        // Each camera's block row is written by one task only, so the parallel
+        // build is race-free and deterministic.
+        S_.reset(rowStart_);
+        std::vector<double> b(static_cast<std::size_t>(n), 0.0);
         parallelFor(pool_, 0, static_cast<int>(cameraObs_.size()), 1, [&](int c0, int c1) {
             for (int c = c0; c < c1; ++c) {
                 const int k = varIndex_[c];
                 if (k < 0) continue;
                 for (int a = 0; a < 6; ++a) {
-                    for (int bb = 0; bb < 6; ++bb) {
+                    for (int bb = 0; bb <= a; ++bb) {
                         double u = U_[k][a * 6 + bb];
                         if (a == bb) u = u * (1 + lambda) + 1e-12;
-                        S[static_cast<std::size_t>(k * 6 + a) * n + k * 6 + bb] += u;
+                        S_.at(k * 6 + a, k * 6 + bb) += u;
                     }
                     b[k * 6 + a] = -gc_[k][a];
                 }
@@ -290,22 +380,25 @@ private:
                     for (int a = 0; a < 6; ++a) {  // b_k += Y_o gp
                         b[k * 6 + a] += Y[o][a * 3] * gp_[p].x + Y[o][a * 3 + 1] * gp_[p].y + Y[o][a * 3 + 2] * gp_[p].z;
                     }
-                    for (int o2 : pointObs_[p]) {  // S_kk' -= Y_o W_o2^T
+                    for (int o2 : pointObs_[p]) {  // S_kk' -= Y_o W_o2^T  (k' <= k)
                         const int k2 = varIndex_[P_.observations[o2].camera];
-                        if (k2 < 0) continue;
+                        if (k2 < 0 || k2 > k) continue;
                         for (int a = 0; a < 6; ++a)
-                            for (int bb = 0; bb < 6; ++bb) {
+                            for (int bb = 0; bb < (k2 == k ? a + 1 : 6); ++bb) {
                                 const double s = Y[o][a * 3] * W_[o2][bb * 3] + Y[o][a * 3 + 1] * W_[o2][bb * 3 + 1] +
                                                  Y[o][a * 3 + 2] * W_[o2][bb * 3 + 2];
-                                S[static_cast<std::size_t>(k * 6 + a) * n + k2 * 6 + bb] -= s;
+                                S_.at(k * 6 + a, k2 * 6 + bb) -= s;
                             }
                     }
                 }
             }
         });
 
-        std::vector<double> dc(static_cast<std::size_t>(n), 0.0);
-        if (n > 0 && !solveSpd(S.data(), b.data(), n, dc.data())) return false;
+        if (n > 0) {
+            if (!S_.factor()) return false;
+            S_.solve(b);
+        }
+        const std::vector<double>& dc = b;
 
         poses = P_.poses;
         for (int c = 0; c < static_cast<int>(poses.size()); ++c) {
@@ -342,6 +435,8 @@ private:
     std::vector<int> varIndex_;  // camera -> variable index, -1 if fixed
     int numVar_ = 0;
     std::vector<std::vector<int>> cameraObs_, pointObs_;
+    std::vector<int> rowStart_;  // skyline envelope of the reduced camera system
+    SkylineMatrix S_;
 
     std::vector<Linearized> lin_;
     std::vector<Mat6> U_;
