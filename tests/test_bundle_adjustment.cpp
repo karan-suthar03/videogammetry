@@ -138,6 +138,20 @@ int main() {
     }
     check(identical, "8-thread result identical to single-threaded", identical);
 
+    // Focal length: the same scene seen with a focal 20% too short. Normalizing
+    // pixels with the wrong focal scales every observation by 800/640.
+    const double wrongFocal = 640;
+    vg::BAProblem focalProblem = s.problem;
+    for (vg::BAObservation& ob : focalProblem.observations) ob.xy = {ob.xy.x * focal / wrongFocal, ob.xy.y * focal / wrongFocal};
+    vg::BAParams focalParams = params;
+    focalParams.refineFocal = true;
+    const vg::BAReport fr = vg::bundleAdjust(focalProblem, wrongFocal, focalParams, &pool);
+    const double recovered = fr.focalScale * wrongFocal;
+    std::printf("  focal: start %.0f px -> %.1f px (true %.0f), data-only std %.2f%%, RMS %.2f -> %.2f px\n", wrongFocal,
+                recovered, focal, 100 * fr.focalStd, fr.initialRmsPx, fr.finalRmsPx);
+    check(std::abs(recovered - focal) < 0.01 * focal, "focal recovered within 1% (start: 20% off)", recovered);
+    check(fr.focalStd < 0.02, "focal well determined by this motion (std < 2%)", fr.focalStd);
+
     std::printf("%s\n", failures ? "FAILED" : "OK");
     return failures ? 1 : 0;
 }

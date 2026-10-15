@@ -27,6 +27,8 @@ struct LiveSnapshot {
     // Camera model of the processed image, for drawing frustums.
     double focal = 1.0;
     int imageWidth = 16, imageHeight = 9;
+    double fovDeg = 0, startFovDeg = 0;  // current estimate (self-calibrated) and the starting guess
+    int focalUpdates = 0;
 
     RgbImage thumbnail;  // current video frame with tracked keypoints drawn
 

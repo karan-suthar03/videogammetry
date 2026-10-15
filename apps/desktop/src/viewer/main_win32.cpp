@@ -215,6 +215,15 @@ void drawHud(HDC dc) {
         if (s.finished) playback = L"finished";
         swprintf(buf, 512, L"tracking + mapping: %.0f fps   playback: %s", s.processingFps, playback);
         line(buf, dim);
+        if (s.fovDeg > 0) {
+            if (s.focalUpdates > 0) {
+                swprintf(buf, 512, L"field of view: %.1f deg (estimated, %d refinements; started from %.1f)", s.fovDeg,
+                         s.focalUpdates, s.startFovDeg);
+            } else {
+                swprintf(buf, 512, L"field of view: %.1f deg (assumed; the motion has not determined it yet)", s.fovDeg);
+            }
+            line(buf, s.focalUpdates > 0 ? RGB(150, 230, 150) : dim);
+        }
         if (!s.message.empty()) line(fromUtf8(s.message), RGB(255, 210, 120));
         if (!g.notice.empty()) line(g.notice, RGB(140, 220, 255));
     }

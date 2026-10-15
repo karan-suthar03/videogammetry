@@ -19,6 +19,7 @@ struct Linearized {
     double w = 0;          // Huber weight (0 = observation ignored, e.g. behind camera)
     double Jc[2][6] = {};  // w.r.t. camera (omega, v)
     double Jx[2][3] = {};  // w.r.t. point
+    double Jf[2] = {};     // w.r.t. the focal scale
 };
 
 double huberCost(double s, double h) { return s <= h ? s * s : 2 * h * s - h * h; }
@@ -145,6 +146,10 @@ public:
         for (int k = 0; k < numVar_; ++k) {
             for (int a = 0; a < 6; ++a) rowStart_[k * 6 + a] = 6 * firstCoupled[k];
         }
+        // The focal scale couples with every camera: a full last row. Being
+        // last, its marginal variance is 1 / L(n, n)^2 of the Cholesky factor.
+        if (params_.refineFocal) rowStart_.push_back(0);
+        priorWeight_ = 1.0 / (params_.focalPriorSigma * params_.focalPriorSigma * focal_ * focal_);
     }
 
     BAReport run() {
@@ -159,7 +164,7 @@ public:
             for (std::size_t o = 0; o < P_.observations.size(); ++o) {
                 const BAObservation& ob = P_.observations[o];
                 double r[2];
-                if (!residual(P_.poses[ob.camera], P_.points[ob.point], ob.xy, r) ||
+                if (!residual(P_.poses[ob.camera], P_.points[ob.point], ob.xy, r, nullptr, s_) ||
                     std::hypot(r[0], r[1]) > th * ob.sigma) {
                     active_[o] = 0;
                     ++rejected;
@@ -170,6 +175,20 @@ public:
         }
         report.inlier = active_;
         report.finalRmsPx = rmsPx(P_.poses, P_.points);
+        if (params_.refineFocal) {
+            report.focalScale = s_;
+            // Information about the focal scale at the solution, minus the prior's.
+            linearize();
+            std::vector<Pose> poses;
+            std::vector<Vec3> points;
+            double s;
+            if (solve(0.0, poses, points, s)) {
+                const int last = S_.size() - 1;
+                const double info = S_.at(last, last) * S_.at(last, last) * focal_ * focal_ -
+                                    1.0 / (params_.focalPriorSigma * params_.focalPriorSigma);
+                report.focalStd = info > 0 ? 1.0 / std::sqrt(info) : 1e30;
+            }
+        }
         report.ok = true;
         return report;
     }
@@ -177,24 +196,26 @@ public:
 private:
     // Levenberg-Marquardt over the active observations; returns accepted steps.
     int optimize() {
-        double cost = totalCost(P_.poses, P_.points);
+        double cost = totalCost(P_.poses, P_.points, s_);
         double lambda = params_.initialLambda;
         int accepted = 0;
         std::vector<Pose> newPoses;
         std::vector<Vec3> newPoints;
+        double newS = s_;
         for (int it = 0; it < params_.maxIterations; ++it) {
             linearize();
             bool ok = false;
             for (int attempt = 0; attempt < 8 && !ok; ++attempt) {
-                if (!solve(lambda, newPoses, newPoints)) {
+                if (!solve(lambda, newPoses, newPoints, newS)) {
                     lambda *= 10;
                     continue;
                 }
-                const double newCost = totalCost(newPoses, newPoints);
+                const double newCost = totalCost(newPoses, newPoints, newS);
                 if (newCost < cost) {
                     const double gain = (cost - newCost) / std::max(cost, 1e-300);
                     P_.poses = newPoses;
                     P_.points = newPoints;
+                    s_ = newS;
                     cost = newCost;
                     lambda = std::max(lambda / 3, 1e-9);
                     ok = true;
@@ -209,23 +230,25 @@ private:
         return accepted;
     }
 
-    // Residual of observation o for given pose/point; false if behind the camera.
-    bool residual(const Pose& pose, const Vec3& X, const Vec2& obs, double r[2], Vec3* Xc = nullptr) const {
+    // Residual of observation o for given pose/point (focal scaled by s); false
+    // if behind the camera.
+    bool residual(const Pose& pose, const Vec3& X, const Vec2& obs, double r[2], Vec3* Xc = nullptr,
+                  double s = 1.0) const {
         const Vec3 c = pose.transform(X);
         if (c.z <= 1e-9) return false;
-        r[0] = c.x / c.z - obs.x;
-        r[1] = c.y / c.z - obs.y;
+        r[0] = s * c.x / c.z - obs.x;
+        r[1] = s * c.y / c.z - obs.y;
         if (Xc) *Xc = c;
         return true;
     }
 
-    double totalCost(const std::vector<Pose>& poses, const std::vector<Vec3>& points) const {
-        double c = 0;
+    double totalCost(const std::vector<Pose>& poses, const std::vector<Vec3>& points, double s) const {
+        double c = params_.refineFocal ? priorWeight_ * (s - 1) * (s - 1) : 0.0;
         for (std::size_t i = 0; i < P_.observations.size(); ++i) {
             if (!active_[i]) continue;
             const BAObservation& o = P_.observations[i];
             double r[2];
-            if (!residual(poses[o.camera], points[o.point], o.xy, r)) {
+            if (!residual(poses[o.camera], points[o.point], o.xy, r, nullptr, s)) {
                 c += huberCost(10 * h_, h_);  // constant penalty keeps the cost finite
                 continue;
             }
@@ -241,7 +264,7 @@ private:
             if (!active_[i]) continue;
             const BAObservation& o = P_.observations[i];
             double r[2];
-            if (!residual(poses[o.camera], points[o.point], o.xy, r)) continue;
+            if (!residual(poses[o.camera], points[o.point], o.xy, r, nullptr, s_)) continue;
             sum += r[0] * r[0] + r[1] * r[1];
             ++n;
         }
@@ -257,14 +280,16 @@ private:
                 const Pose& pose = P_.poses[ob.camera];
                 Linearized& L = lin_[o];
                 Vec3 c;
-                if (!active_[o] || !residual(pose, P_.points[ob.point], ob.xy, L.r, &c)) continue;
+                if (!active_[o] || !residual(pose, P_.points[ob.point], ob.xy, L.r, &c, s_)) continue;
                 // Whitened: residual and Jacobians divided by the observation's sigma.
                 const double ws = 1.0 / ob.sigma;
                 L.r[0] *= ws;
                 L.r[1] *= ws;
                 const double s = std::hypot(L.r[0], L.r[1]);
                 L.w = s <= h_ ? 1.0 : h_ / s;
-                const double iz = ws / c.z;
+                L.Jf[0] = ws * c.x / c.z;
+                L.Jf[1] = ws * c.y / c.z;
+                const double iz = s_ * ws / c.z;
                 const double du[3] = {iz, 0, -c.x * iz / c.z};
                 const double dv[3] = {0, iz, -c.y * iz / c.z};
                 // Camera: X' = exp(omega) Xc + v  ->  dXc/domega = -[Xc]x, dXc/dv = I.
@@ -284,6 +309,7 @@ private:
         // Camera blocks U, gradient gc; point blocks V, gradient gp; cross terms W.
         U_.assign(static_cast<std::size_t>(numVar_), Mat6{});
         gc_.assign(static_cast<std::size_t>(numVar_), Vec6{});
+        Ucf_.assign(static_cast<std::size_t>(numVar_), Vec6{});
         parallelFor(pool_, 0, static_cast<int>(cameraObs_.size()), 1, [&](int c0, int c1) {
             for (int c = c0; c < c1; ++c) {
                 const int k = varIndex_[c];
@@ -292,6 +318,7 @@ private:
                     const Linearized& L = lin_[o];
                     if (L.w == 0) continue;
                     for (int a = 0; a < 6; ++a) {
+                        Ucf_[k][a] += L.w * (L.Jc[0][a] * L.Jf[0] + L.Jc[1][a] * L.Jf[1]);
                         gc_[k][a] += L.w * (L.Jc[0][a] * L.r[0] + L.Jc[1][a] * L.r[1]);
                         for (int b = 0; b < 6; ++b) {
                             U_[k][a * 6 + b] += L.w * (L.Jc[0][a] * L.Jc[0][b] + L.Jc[1][a] * L.Jc[1][b]);
@@ -303,13 +330,16 @@ private:
         V_.assign(P_.points.size(), Mat33{});
         gp_.assign(P_.points.size(), Vec3{});
         W_.assign(P_.observations.size(), Mat63{});
+        Wfp_.assign(P_.points.size(), Vec3{});
         parallelFor(pool_, 0, static_cast<int>(P_.points.size()), 64, [&](int p0, int p1) {
             for (int p = p0; p < p1; ++p) {
                 double g[3] = {0, 0, 0};
+                double wf[3] = {0, 0, 0};
                 for (int o : pointObs_[p]) {
                     const Linearized& L = lin_[o];
                     if (L.w == 0) continue;
                     for (int a = 0; a < 3; ++a) {
+                        wf[a] += L.w * (L.Jf[0] * L.Jx[0][a] + L.Jf[1] * L.Jx[1][a]);
                         g[a] += L.w * (L.Jx[0][a] * L.r[0] + L.Jx[1][a] * L.r[1]);
                         for (int b = 0; b < 3; ++b) {
                             V_[p][a * 3 + b] += L.w * (L.Jx[0][a] * L.Jx[0][b] + L.Jx[1][a] * L.Jx[1][b]);
@@ -322,15 +352,30 @@ private:
                     }
                 }
                 gp_[p] = {g[0], g[1], g[2]};
+                Wfp_[p] = {wf[0], wf[1], wf[2]};
             }
         });
+
+        // Focal block and gradient (with the prior pulling toward the start).
+        Uff_ = 0;
+        gf_ = 0;
+        if (params_.refineFocal) {
+            for (const Linearized& L : lin_) {
+                if (L.w == 0) continue;
+                Uff_ += L.w * (L.Jf[0] * L.Jf[0] + L.Jf[1] * L.Jf[1]);
+                gf_ += L.w * (L.Jf[0] * L.r[0] + L.Jf[1] * L.r[1]);
+            }
+            Uff_ += priorWeight_;
+            gf_ += priorWeight_ * (s_ - 1);
+        }
     }
 
     // Solves the damped normal equations via the Schur complement and returns
     // the updated poses/points (not yet accepted).
-    bool solve(double lambda, std::vector<Pose>& poses, std::vector<Vec3>& points) {
+    bool solve(double lambda, std::vector<Pose>& poses, std::vector<Vec3>& points, double& s) {
         const int np = static_cast<int>(P_.points.size());
-        const int n = 6 * numVar_;
+        const int nc = 6 * numVar_;
+        const int n = nc + (params_.refineFocal ? 1 : 0);
 
         // Damped, inverted point blocks.
         std::vector<Mat33> Vinv(static_cast<std::size_t>(np));
@@ -399,11 +444,45 @@ private:
             }
         });
 
+        // Focal row: S_fk = Ucf_k - sum_p Wfp^T Vinv W_o^T, S_ff = Uff - sum_p
+        // Wfp^T Vinv Wfp, b_f = -gf + sum_p Wfp^T Vinv gp.
+        std::vector<Vec3> zf;
+        if (params_.refineFocal) {
+            const int f = nc;
+            zf.assign(static_cast<std::size_t>(np), Vec3{});
+            double sff = Uff_ * (1 + lambda) + 1e-12;
+            double bf = -gf_;
+            for (int k = 0; k < numVar_; ++k) {
+                for (int a = 0; a < 6; ++a) S_.at(f, k * 6 + a) += Ucf_[k][a];
+            }
+            for (int p = 0; p < np; ++p) {
+                if (!pointOk[p]) continue;
+                const Mat33& vi = Vinv[p];
+                const Vec3& w = Wfp_[p];
+                const Vec3 z{vi[0] * w.x + vi[1] * w.y + vi[2] * w.z, vi[3] * w.x + vi[4] * w.y + vi[5] * w.z,
+                             vi[6] * w.x + vi[7] * w.y + vi[8] * w.z};
+                zf[p] = z;
+                sff -= dot(w, z);
+                bf += dot(z, gp_[p]);
+                for (int o : pointObs_[p]) {
+                    const int k = varIndex_[P_.observations[o].camera];
+                    if (k < 0) continue;
+                    for (int a = 0; a < 6; ++a) {
+                        S_.at(f, k * 6 + a) -= W_[o][a * 3] * z.x + W_[o][a * 3 + 1] * z.y + W_[o][a * 3 + 2] * z.z;
+                    }
+                }
+            }
+            S_.at(f, f) = sff;
+            b[f] = bf;
+        }
+
         if (n > 0) {
             if (!S_.factor()) return false;
             S_.solve(b);
         }
         const std::vector<double>& dc = b;
+        const double ds = params_.refineFocal ? dc[nc] : 0.0;
+        s = s_ + ds;
 
         poses = P_.poses;
         for (int c = 0; c < static_cast<int>(poses.size()); ++c) {
@@ -421,6 +500,9 @@ private:
                     for (int bb = 0; bb < 3; ++bb)
                         for (int a = 0; a < 6; ++a) rhs[bb] -= W_[o][a * 3 + bb] * dc[k * 6 + a];
                 }
+                rhs[0] -= Wfp_[p].x * ds;
+                rhs[1] -= Wfp_[p].y * ds;
+                rhs[2] -= Wfp_[p].z * ds;
                 Vec3 d;
                 d.x = Vinv[p][0] * rhs[0] + Vinv[p][1] * rhs[1] + Vinv[p][2] * rhs[2];
                 d.y = Vinv[p][3] * rhs[0] + Vinv[p][4] * rhs[1] + Vinv[p][5] * rhs[2];
@@ -449,6 +531,13 @@ private:
     std::vector<Mat33> V_;
     std::vector<Vec3> gp_;
     std::vector<Mat63> W_;
+
+    // Focal scale (refined focal = s_ * focal_) and its blocks.
+    double s_ = 1.0;
+    double priorWeight_ = 0;
+    std::vector<Vec6> Ucf_;   // camera-focal
+    std::vector<Vec3> Wfp_;   // point-focal
+    double Uff_ = 0, gf_ = 0;
 };
 
 }  // namespace

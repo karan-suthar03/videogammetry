@@ -39,6 +39,11 @@ struct BAParams {
     // again without them. The Huber loss alone still lets wrong observations
     // bias the result by a few pixels. <= 0 disables the second pass.
     double outlierThresholdPx = 2.5;
+    // Also refine the focal length (shared by all cameras; principal point
+    // fixed). A Gaussian prior with this relative standard deviation keeps it
+    // near the starting value where the data says little.
+    bool refineFocal = false;
+    double focalPriorSigma = 0.05;
 };
 
 struct BAReport {
@@ -48,10 +53,16 @@ struct BAReport {
     double finalRmsPx = 0;    // ... and after, over the observations kept as inliers
     int outliers = 0;
     std::vector<std::uint8_t> inlier;  // per observation (1 = kept)
+    // With refineFocal: refined focal = focalScale * focalPx, and the relative
+    // standard deviation of the focal length from the observations alone (for
+    // 1 px image noise; prior excluded). Large = the motion does not determine it.
+    double focalScale = 1.0;
+    double focalStd = 1e30;
 };
 
-// Refines the non-fixed poses and all points in place. `focalPx` converts
-// normalized units to pixels. Deterministic with or without a pool.
+// Refines the non-fixed poses and all points in place (and the focal length,
+// see BAParams::refineFocal). `focalPx` converts normalized units to pixels;
+// observations are normalized with it. Deterministic with or without a pool.
 BAReport bundleAdjust(BAProblem& problem, double focalPx, const BAParams& params, ThreadPool* pool = nullptr);
 
 }  // namespace vg

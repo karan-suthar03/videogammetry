@@ -64,6 +64,8 @@ public:
         int pointsMerged = 0;    // duplicates merged by fusion
         int observationsFused = 0;  // observations added by fusion
         BAReport globalBA;                                 // set by finish()
+        int focalUpdates = 0;     // accepted focal refinements
+        int focalRejected = 0;    // focal refinements the motion could not support
         int globalBACameras = 0, globalBAPoints = 0;
     };
 
@@ -100,8 +102,11 @@ public:
     const Pose& lastPose() const { return pose_; }
     bool lastWasKeyframe() const { return lastWasKeyframe_; }
 
-    // Camera model of the processed image (valid after the first frame).
+    // Camera model of the processed image (valid after the first frame); the
+    // focal length is refined as the map grows (see MappingParams).
     const CameraIntrinsics& intrinsics() const { return intrinsics_; }
+    // Current field of view across the long side, from the focal length.
+    double fovDeg() const;
     // Input-frame pixels per processed-image pixel (>= 1).
     float processScale() const { return processScale_; }
     // Threads used per frame (including the caller).
@@ -145,7 +150,10 @@ private:
     // Bundle-adjusts the given keyframes with all their points; other
     // keyframes that see those points are held fixed. Applies the result and
     // removes rejected observations.
-    BAReport adjust(const std::vector<int>& keyframes, int iterations);
+    // With refineFocal, the focal length is free too, only the given
+    // keyframes take part (other observers would hold it to its old value),
+    // and the result is applied only if the focal length is well determined.
+    BAReport adjust(const std::vector<int>& keyframes, int iterations, bool refineFocal = false);
     void startNewMap();
 
     Options options_;

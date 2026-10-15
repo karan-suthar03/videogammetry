@@ -287,6 +287,9 @@ int main(int argc, char** argv) {
                         st.globalBACameras, st.globalBAPoints, st.globalBA.initialRmsPx, st.globalBA.finalRmsPx,
                         st.globalBA.iterations, st.globalBA.outliers);
         }
+        std::printf("camera:  field of view %.1f deg (started from %.1f); focal refined %d times, %d times "
+                    "not determined by the motion\n",
+                    reconstructor.fovDeg(), options.fovDeg, st.focalUpdates, st.focalRejected);
         std::printf("points:  %d triangulated, %d culled as unconfirmed; fusion: %d merged, %d observations added\n",
                     st.pointsCreated, st.pointsCulled, st.pointsMerged, st.observationsFused);
         const vg::MapQuality q =vg::evaluateMap(reconstructor.mapPoints(), reconstructor.keyframes());

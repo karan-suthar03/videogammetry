@@ -509,6 +509,19 @@ void Reconstructor::addKeyframe() {
             previousPose_ = pose_;
         }
     }
+    if (mp.refineFocal && mp.focalEveryKeyframes > 0 && n % mp.focalEveryKeyframes == 0 &&
+        n >= mp.focalBAKeyframes) {
+        std::vector<int> window{n - 1};
+        for (const auto& [k, shared] : covisibleKeyframes(n - 1)) {
+            if (static_cast<int>(window.size()) >= mp.focalBAKeyframes) break;
+            window.push_back(k);
+        }
+        const BAReport r = adjust(window, mp.localBAIterations, true);
+        if (r.ok) {
+            pose_ = keyframes_.back().pose;
+            previousPose_ = pose_;
+        }
+    }
     trackedPoints_ = keyframes_.back().pointIds;
 }
 
@@ -522,7 +535,7 @@ double Reconstructor::medianSceneDepth(const Keyframe& kf) const {
     return medianOf(std::move(depths));
 }
 
-BAReport Reconstructor::adjust(const std::vector<int>& keyframes, int iterations) {
+BAReport Reconstructor::adjust(const std::vector<int>& keyframes, int iterations, bool refineFocal) {
     const int nk = static_cast<int>(keyframes_.size());
     if (nk < 2 || keyframes.empty()) return {};
     std::vector<char> variable(static_cast<std::size_t>(nk), 0);
@@ -544,8 +557,12 @@ BAReport Reconstructor::adjust(const std::vector<int>& keyframes, int iterations
     // Cameras: every keyframe that sees those points (the adjusted ones plus
     // fixed neighbours), in keyframe order so the reduced system stays banded.
     std::vector<char> involved(static_cast<std::size_t>(nk), 0);
-    for (int id : pointIds) {
-        for (const PointObservation& o : points_[id].observations) involved[o.keyframe] = 1;
+    if (refineFocal) {
+        involved = variable;
+    } else {
+        for (int id : pointIds) {
+            for (const PointObservation& o : points_[id].observations) involved[o.keyframe] = 1;
+        }
     }
     BAProblem problem;
     std::vector<int> cameraKeyframe;
@@ -579,8 +596,20 @@ BAReport Reconstructor::adjust(const std::vector<int>& keyframes, int iterations
     BAParams params;
     params.maxIterations = iterations;
     params.outlierThresholdPx = options_.mapping.maxReprojectionErrorPx + 0.5;
-    const BAReport report = bundleAdjust(problem, intrinsics_.fx, params, pool_.get());
+    params.refineFocal = refineFocal;
+    params.focalPriorSigma = options_.mapping.focalPriorSigma;
+    BAReport report = bundleAdjust(problem, intrinsics_.fx, params, pool_.get());
     if (!report.ok) return report;
+    if (refineFocal) {
+        if (!(report.focalStd <= options_.mapping.focalMaxStd)) {
+            ++stats_.focalRejected;  // not determined by this motion: change nothing
+            report.ok = false;
+            return report;
+        }
+        ++stats_.focalUpdates;
+        intrinsics_.fx *= report.focalScale;
+        intrinsics_.fy *= report.focalScale;
+    }
 
     for (std::size_t c = 0; c < cameraKeyframe.size(); ++c) {
         if (!problem.fixedPose[c]) keyframes_[cameraKeyframe[c]].pose = problem.poses[c];
@@ -845,7 +874,10 @@ void Reconstructor::finish() {
     auto t = profiler_.scope("global ba");
     std::vector<int> all(keyframes_.size());
     for (std::size_t k = 0; k < all.size(); ++k) all[k] = static_cast<int>(k);
-    stats_.globalBA = adjust(all, iterations);
+    stats_.globalBA = adjust(all, iterations, options_.mapping.refineFocal);
+    if (!stats_.globalBA.ok && options_.mapping.refineFocal) {
+        stats_.globalBA = adjust(all, iterations);  // focal not determined: refine the rest only
+    }
     stats_.globalBACameras = static_cast<int>(keyframes_.size());
     stats_.globalBAPoints = static_cast<int>(std::count_if(points_.begin(), points_.end(),
                                                            [](const MapPoint& p) { return !p.bad; }));
@@ -1001,6 +1033,11 @@ void Reconstructor::startNewMap() {
     state_ = State::Initializing;
     hasVelocity_ = false;
     lostCount_ = 0;
+}
+
+double Reconstructor::fovDeg() const {
+    if (intrinsics_.fx <= 0) return options_.fovDeg;
+    return 2 * std::atan(0.5 * std::max(imageWidth_, imageHeight_) / intrinsics_.fx) * kRadToDeg;
 }
 
 PointCloud Reconstructor::pointCloud() const {

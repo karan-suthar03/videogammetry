@@ -221,6 +221,9 @@ void LiveSession::publish(const vg::FrameView* frame, double processingFps, bool
     s->state = r.state();
     s->trackedCount = r.lastTrackedCount();
     s->maps = r.stats().maps;
+    s->fovDeg = r.fovDeg();
+    s->startFovDeg = settings_.options.fovDeg;
+    s->focalUpdates = r.stats().focalUpdates;
     s->processingFps = processingFps;
 
     std::lock_guard<std::mutex> lock(mutex_);

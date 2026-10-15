@@ -79,6 +79,20 @@ struct MappingParams {
     int localBAIterations = 10;
     int globalBAIterations = 20;  // full refinement in finish() (0 = off)
 
+    // Focal length self-calibration (the camera is uncalibrated; the field of
+    // view option is only a starting guess). Every `focalEveryKeyframes`
+    // keyframes, the newest keyframe and its most covisible ones
+    // (`focalBAKeyframes` in all) are bundle-adjusted with the focal length
+    // free. The result is kept only if the observations alone determine the
+    // focal length to `focalMaxStd` (relative); with motion that cannot (e.g.
+    // walking straight ahead) the focal length stays as it is. The global BA
+    // in finish() refines it the same way.
+    bool refineFocal = true;
+    int focalEveryKeyframes = 5;
+    int focalBAKeyframes = 20;
+    double focalMaxStd = 0.01;
+    double focalPriorSigma = 0.05;
+
     // Culling of new points: a point must be seen by at least
     // `minConfirmingKeyframes` keyframes once `probationKeyframes` more
     // keyframes have been added since its creation, or it is removed (a
