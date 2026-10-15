@@ -153,8 +153,16 @@ void SceneRenderer::render(const LiveSnapshot& scene, const OrbitView& view, con
 
     const double scale = scene.sceneScale;
     Projector pr;
-    pr.pose = view.pose(scale);
-    pr.focal = 0.5 * fb.width / std::tan(view.fovDeg * kPi / 360.0);
+    const bool throughCamera = view.attached && !scene.keyframes.empty();
+    if (throughCamera) {
+        // The video camera's own view: its pose, and its focal length scaled
+        // so the whole video frame fits the window.
+        pr.pose = scene.current;
+        pr.focal = scene.focal * std::min(double(fb.width) / scene.imageWidth, double(fb.height) / scene.imageHeight);
+    } else {
+        pr.pose = view.pose(scale);
+        pr.focal = 0.5 * fb.width / std::tan(view.fovDeg * kPi / 360.0);
+    }
     pr.cx = 0.5 * fb.width;
     pr.cy = 0.5 * fb.height;
     pr.nearZ = 1e-3 * scale;
@@ -205,10 +213,12 @@ void SceneRenderer::render(const LiveSnapshot& scene, const OrbitView& view, con
         drawLine3D(scene.keyframes.back().center(), scene.current.center(), kPath, 2, pr, fb);
     }
 
-    if (options.showKeyframes) {
+    // Through the camera, recent keyframes sit right around the eye and would
+    // cover the view.
+    if (options.showKeyframes && !throughCamera) {
         for (const vg::Pose& k : scene.keyframes) drawFrustum(k, scene, 0.06 * scale, kKeyframe, 1, pr, fb);
     }
-    if (!scene.keyframes.empty()) {
+    if (!scene.keyframes.empty() && !throughCamera) {  // looking through it: nothing to draw
         drawFrustum(scene.current, scene, 0.14 * scale, scene.currentValid ? kCurrent : kLostCamera, 2, pr, fb);
     }
 }

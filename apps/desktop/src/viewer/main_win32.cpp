@@ -220,7 +220,7 @@ void drawHud(HDC dc) {
     }
 
     const wchar_t* help[] = {
-        L"left-drag orbit   right-drag pan   wheel zoom   F follow camera   R reset view",
+        L"left-drag orbit   right-drag pan   wheel zoom   C look through camera   F follow camera   R reset view",
         L"Space pause   M real-time/max speed   T highlight tracked   K keyframes   +/- point size   O open   S save .ply",
         L"red: current camera   blue: keyframes   orange: camera path   green: points tracked in this frame",
     };
@@ -229,7 +229,8 @@ void drawHud(HDC dc) {
         drawText(dc, margin, hy, h, dim);
         hy += lineH;
     }
-    swprintf(buf, 512, L"follow: %s", g.view.follow ? L"on" : L"off");
+    swprintf(buf, 512, L"view: %s", g.view.attached ? L"through the current camera (C or drag to leave)"
+                                                      : (g.view.follow ? L"orbit, following the camera" : L"orbit"));
     drawText(dc, margin, hy - lineH * 4, buf, dim);
     SelectObject(dc, oldFont);
 }
@@ -279,6 +280,7 @@ void onKey(WPARAM key) {
         case 'M':
             if (g.session) g.session->setRealTime(!g.session->realTime());
             break;
+        case 'C': g.view.attached = !g.view.attached; break;
         case 'F': g.view.follow = !g.view.follow; break;
         case 'R': g.view.reset(); break;
         case 'T': g.renderOptions.highlightTracked = !g.renderOptions.highlightTracked; break;
@@ -319,6 +321,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             const POINT p{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
             const double dx = p.x - g.last.x, dy = p.y - g.last.y;
             g.last = p;
+            g.view.attached = false;  // dragging takes the view back
             if (g.drag == App::Drag::Orbit) {
                 g.view.orbit(dx, dy);
             } else {
@@ -328,6 +331,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_MOUSEWHEEL:
+            g.view.attached = false;
             g.view.zoomBy(GET_WHEEL_DELTA_WPARAM(wp) / double(WHEEL_DELTA));
             g.dirty = true;
             return 0;

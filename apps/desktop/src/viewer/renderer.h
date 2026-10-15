@@ -27,6 +27,7 @@ struct OrbitView {
     double fovDeg = 60.0;  // horizontal field of view of the viewer
     vg::Vec3 target;       // orbit center (world)
     bool follow = true;    // target tracks the current camera
+    bool attached = false; // look through the current camera (its pose and field of view)
 
     void orbit(double dxPx, double dyPx);
     // Moves the target in the view plane; stops following.
