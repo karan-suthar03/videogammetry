@@ -584,54 +584,129 @@ int Reconstructor::triangulateBetween(int olderIndex, int newerIndex) {
     const MappingParams& mp = options_.mapping;
     const double fx = intrinsics_.fx;
 
-    // Features not yet attached to map points.
-    std::vector<int> ia, ib;
-    std::vector<Keypoint> ka, kb;
-    std::vector<Descriptor> da, db;
-    for (std::size_t i = 0; i < older.pointIds.size(); ++i) {
-        if (older.pointIds[i] < 0) {
-            ia.push_back(static_cast<int>(i));
-            ka.push_back(older.keypoints[i]);
-            da.push_back(older.descriptors[i]);
-        }
-    }
-    for (std::size_t i = 0; i < newer.pointIds.size(); ++i) {
-        if (newer.pointIds[i] < 0) {
-            ib.push_back(static_cast<int>(i));
-            kb.push_back(newer.keypoints[i]);
-            db.push_back(newer.descriptors[i]);
-        }
-    }
-    MatchParams matchParams = options_.match;
-    matchParams.searchRadius = 0;  // keyframes can be far apart in any direction
-    std::vector<Match> matches;
-    matchFeatures(kb, db, ka, da, matchParams, matches, nullptr, pool_.get());
-
-    // Relative pose older -> newer is known: check epipolar consistency, then
-    // triangulate in the older camera frame.
+    // Relative pose older -> newer is known. A match x1 (older) <-> x2 (newer)
+    // must satisfy x2^T E x1 = 0: x1 lies on the epipolar line E^T x2.
     const Pose rel = older.pose.inverse().then(newer.pose);
-    const Mat3 E = skew(rel.t) * rel.R;
-    const double maxSampson2 = std::pow(mp.maxReprojectionErrorPx / fx, 2);
+    const Mat3 Et = (skew(rel.t) * rel.R).transposed();
     const Vec3 c2 = rel.center();
     const Pose olderInv = older.pose.inverse();
 
+    // Features not yet attached to map points.
+    std::vector<int> ia, ib;
+    for (std::size_t i = 0; i < older.pointIds.size(); ++i) {
+        if (older.pointIds[i] < 0) ia.push_back(static_cast<int>(i));
+    }
+    for (std::size_t i = 0; i < newer.pointIds.size(); ++i) {
+        if (newer.pointIds[i] < 0) ib.push_back(static_cast<int>(i));
+    }
+    std::vector<Vec2> xa(ia.size());
+    for (std::size_t j = 0; j < ia.size(); ++j) {
+        xa[j] = intrinsics_.normalize(older.keypoints[ia[j]].x, older.keypoints[ia[j]].y);
+    }
+
+    // Guided search: for each newer feature, the best older candidate near
+    // its epipolar line, if unambiguous among those candidates.
+    struct Candidate {
+        int older = -1;  // index into ia
+        int distance = INT_MAX;
+    };
+    std::vector<Candidate> best(ib.size());
+    const int maxLevelDiff = options_.match.maxLevelDiff;
+    parallelFor(pool_.get(), 0, static_cast<int>(ib.size()), 32, [&](int j0, int j1) {
+        for (int j = j0; j < j1; ++j) {
+            const Keypoint& kb = newer.keypoints[ib[j]];
+            const Vec2 x2 = intrinsics_.normalize(kb.x, kb.y);
+            const Vec3 line = Et * Vec3{x2.x, x2.y, 1.0};
+            const double lineNorm = std::sqrt(line.x * line.x + line.y * line.y);
+            if (lineNorm < 1e-12) continue;  // no translation: no epipolar line
+            const double toPx = fx / lineNorm;
+            const Descriptor& db = newer.descriptors[ib[j]];
+            int bestA = -1, bestDist = INT_MAX, second = INT_MAX;
+            for (std::size_t a = 0; a < ia.size(); ++a) {
+                const Keypoint& ka = older.keypoints[ia[a]];
+                if (std::abs(ka.level - kb.level) > maxLevelDiff) continue;
+                const double lineDistPx = std::abs(line.x * xa[a].x + line.y * xa[a].y + line.z) * toPx;
+                if (lineDistPx > mp.epipolarDistancePx * ka.scale) continue;
+                const int d = hammingDistance(db, older.descriptors[ia[a]]);
+                if (d < bestDist) {
+                    second = bestDist;
+                    bestDist = d;
+                    bestA = static_cast<int>(a);
+                } else if (d < second) {
+                    second = d;
+                }
+            }
+            if (bestA < 0 || bestDist > mp.triangulationMaxHamming) continue;
+            if (second != INT_MAX && bestDist >= mp.triangulationRatio * second) continue;
+            best[j] = {bestA, bestDist};
+        }
+    });
+
+    // Mutual best: one newer feature per older feature (closest descriptor).
+    std::vector<int> ownerOfOlder(ia.size(), -1);
+    for (std::size_t j = 0; j < ib.size(); ++j) {
+        const Candidate& c = best[j];
+        if (c.older < 0) continue;
+        const int owner = ownerOfOlder[c.older];
+        if (owner < 0 || c.distance < best[owner].distance) ownerOfOlder[c.older] = static_cast<int>(j);
+    }
+
+    // Rotation consistency: the change of keypoint orientation between the two
+    // keyframes should agree for all matches (one camera roll); keep the
+    // three most common 12-degree bins, as ORB-SLAM does.
+    constexpr int kBins = 30;
+    constexpr double kTwoPi = 6.283185307179586;
+    std::vector<int> binOf(ib.size(), -1);
+    int histogram[kBins] = {};
+    for (std::size_t a = 0; a < ia.size(); ++a) {
+        const int j = ownerOfOlder[a];
+        if (j < 0) continue;
+        double d = newer.keypoints[ib[j]].angle - older.keypoints[ia[a]].angle;
+        d -= kTwoPi * std::floor(d / kTwoPi);
+        const int bin = std::min(kBins - 1, static_cast<int>(d / kTwoPi * kBins));
+        binOf[j] = bin;
+        ++histogram[bin];
+    }
+    int top[3] = {-1, -1, -1};
+    for (int bin = 0; bin < kBins; ++bin) {
+        for (int r = 0; r < 3; ++r) {
+            if (top[r] < 0 || histogram[bin] > histogram[top[r]]) {
+                for (int s = 2; s > r; --s) top[s] = top[s - 1];
+                top[r] = bin;
+                break;
+            }
+        }
+    }
+    // Like ORB-SLAM, secondary bins count only if reasonably populated.
+    const auto keptBin = [&](int bin) {
+        if (bin == top[0]) return true;
+        for (int r = 1; r < 3; ++r) {
+            if (bin == top[r] && top[0] >= 0 && histogram[bin] >= 0.1 * histogram[top[0]]) return true;
+        }
+        return false;
+    };
+
     int created = 0;
-    for (const Match& m : matches) {
-        const int a = ia[m.train], b = ib[m.query];
-        const Vec2 x1 = intrinsics_.normalize(older.keypoints[a].x, older.keypoints[a].y);
-        const Vec2 x2 = intrinsics_.normalize(newer.keypoints[b].x, newer.keypoints[b].y);
-        if (!(sampsonError(E, x1, x2) < maxSampson2)) continue;  // also rejects pure rotation (E ~ 0)
+    for (std::size_t aj = 0; aj < ia.size(); ++aj) {
+        const int j = ownerOfOlder[aj];
+        if (j < 0 || !keptBin(binOf[j])) continue;
+        const int a = ia[aj], b = ib[j];
+        const Keypoint& ka = older.keypoints[a];
+        const Keypoint& kb = newer.keypoints[b];
+        const Vec2 x1 = xa[aj];
+        const Vec2 x2 = intrinsics_.normalize(kb.x, kb.y);
         Vec3 X;
         if (!triangulate(x1, x2, rel.R, rel.t, X)) continue;
         if (X.z <= 0 || rel.transform(X).z <= 0) continue;
         if (triangulationAngleDeg(X, {}, c2) < mp.minTriangulationAngleDeg) continue;
-        if (reprojectionErrorPx(Pose{}, X, x1, fx) > mp.maxReprojectionErrorPx) continue;
-        if (reprojectionErrorPx(rel, X, x2, fx) > mp.maxReprojectionErrorPx) continue;
+        // Coarser pyramid levels localize keypoints less precisely.
+        if (reprojectionErrorPx(Pose{}, X, x1, fx) > mp.maxReprojectionErrorPx * ka.scale) continue;
+        if (reprojectionErrorPx(rel, X, x2, fx) > mp.maxReprojectionErrorPx * kb.scale) continue;
 
         MapPoint p;
         p.position = olderInv.transform(X);
         p.descriptor = newer.descriptors[b];
-        p.level = newer.keypoints[b].level;
+        p.level = kb.level;
         p.color = newer.colors[b];
         p.firstKeyframe = newerIndex;
         createPoint(std::move(p), {olderIndex, a}, {newerIndex, b});

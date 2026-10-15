@@ -62,6 +62,12 @@ struct MappingParams {
     int triangulationKeyframes = 4;
     int triangulationSearch = 15;
     double minBaselineRatio = 0.02;
+    // Matching for triangulation is guided by the known poses: candidates must
+    // lie within `epipolarDistancePx` (times the keypoint's pyramid scale) of
+    // the epipolar line, and the best must be unambiguous among them.
+    float epipolarDistancePx = 2.0f;
+    int triangulationMaxHamming = 50;
+    float triangulationRatio = 0.8f;
 
     // Bundle adjustment.
     int localBAKeyframes = 10;    // keyframes refined after each new keyframe (0 = off)
