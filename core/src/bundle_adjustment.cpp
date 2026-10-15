@@ -172,6 +172,7 @@ public:
         report.initialRmsPx = rmsPx(P_.poses, P_.points);
 
         report.iterations = optimize();
+        if (cancelled()) return report;  // not ok
         if (params_.outlierThresholdPx > 0) {
             const double th = params_.outlierThresholdPx / focal_;
             int rejected = 0;
@@ -187,6 +188,7 @@ public:
             if (rejected > 0) report.iterations += optimize();
             report.outliers = rejected;
         }
+        if (cancelled()) return report;
         report.inlier = active_;
         report.finalRmsPx = rmsPx(P_.poses, P_.points);
         report.focalScale = s_;
@@ -197,6 +199,8 @@ public:
     }
 
 private:
+    bool cancelled() const { return params_.cancel && params_.cancel->load(std::memory_order_relaxed); }
+
     // Data-only standard deviations of the intrinsics at the solution (for
     // 1 px image noise): marginal information L_gg L_gg^T minus the priors'.
     void intrinsicsUncertainty(BAReport& report) {
@@ -240,6 +244,7 @@ private:
         std::vector<Vec3> newPoints;
         double newS = s_, newK = k_;
         for (int it = 0; it < params_.maxIterations; ++it) {
+            if (cancelled()) break;
             linearize();
             bool ok = false;
             for (int attempt = 0; attempt < 8 && !ok; ++attempt) {

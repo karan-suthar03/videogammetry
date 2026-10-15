@@ -3,6 +3,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <atomic>
+#include <future>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -66,11 +68,18 @@ public:
         BAReport globalBA;                                 // set by finish()
         int focalUpdates = 0;     // accepted focal refinements
         int focalRejected = 0;    // focal refinements the motion could not support
+        int backgroundPasses = 0;      // background global BA passes merged into the map
+        int backgroundDiscarded = 0;   // ... discarded: the intrinsics changed while they ran
+        double backgroundLastMs = 0;   // duration of the last one (on its own thread)
+        double backgroundSnapshotMs = 0;  // total time the tracking thread spent copying and merging
         int globalBACameras = 0, globalBAPoints = 0;
     };
 
     Reconstructor() : Reconstructor(Options{}) {}
     explicit Reconstructor(const Options& options);
+    ~Reconstructor();  // waits for a running background pass
+    Reconstructor(const Reconstructor&) = delete;
+    Reconstructor& operator=(const Reconstructor&) = delete;
 
     // Processes the next frame: extracts features here, then tracks/maps.
     void addFrame(const FrameView& frame);
@@ -157,6 +166,31 @@ private:
     // keyframes take part (other observers would hold it to its old value),
     // and the result is applied only if the focal length is well determined.
     BAReport adjust(const std::vector<int>& keyframes, int iterations, bool refineFocal = false);
+
+    // A bundle adjustment over a copy of (part of) the map: built and applied
+    // on the tracking thread, solved anywhere (also on a background thread
+    // while the map keeps growing).
+    struct BAJob {
+        BAProblem problem;
+        BAParams params;
+        double focal = 0;                     // observations are normalized with it
+        std::vector<int> cameraKeyframe;      // problem camera -> keyframe
+        std::vector<int> pointIds;            // problem point -> map point
+        std::vector<PointObservation> obsRef; // problem observation -> keyframe keypoint
+        long mapEpoch = 0;
+        int keyframeCount = 0, pointCount = 0;  // map size when built: later ones are carried along
+        BAReport report;
+        double solveMs = 0;
+    };
+    std::unique_ptr<BAJob> buildJob(const std::vector<int>& keyframes, int iterations, bool refineFocal) const;
+    // Applies a solved job; keyframes and points not in it (created while it
+    // ran) keep their pose / position relative to the keyframe they are
+    // attached to. Returns the report (ok = false if nothing was applied).
+    BAReport applyJob(BAJob& job);
+    // Merges a finished background pass and starts the next one.
+    void pollBackgroundBA();
+    // Stops a running background pass without merging it.
+    void cancelBackgroundBA();
     void startNewMap();
     // Recomputes undistorted keypoint positions (keyframes and current frame)
     // after the intrinsics changed.
@@ -164,6 +198,7 @@ private:
 
     Options options_;
     std::unique_ptr<ThreadPool> pool_;  // null when single-threaded; declared before extractor_
+    std::unique_ptr<ThreadPool> backgroundPool_;  // workers of the background BA
     FeatureExtractor extractor_;        // used by addFrame()
     Profiler profiler_;
     CameraIntrinsics intrinsics_;
@@ -200,6 +235,15 @@ private:
     std::vector<Keyframe> keyframes_;
     std::vector<MapPoint> points_;
     std::vector<int> recentPoints_;  // points still on probation
+    long mapEpoch_ = 0;              // increases when a new map is started
+
+    // Background global BA: the running pass (declared last: destroyed, i.e.
+    // waited for, before everything it uses).
+    std::unique_ptr<BAJob> backgroundJob_;
+    std::atomic<bool> cancelBackground_{false};
+    bool backgroundOwnsIntrinsics_ = false;  // a whole-map pass has refined them: local refinement stops
+    bool backgroundIntrinsicsFailed_ = false;
+    std::future<void> backgroundDone_;
     std::vector<MapPoint> bestPoints_;
     std::vector<Vec3> bestTrajectory_;
 };

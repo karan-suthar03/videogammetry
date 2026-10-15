@@ -16,8 +16,10 @@ namespace vg {
 // threads runs N-1 workers.
 class ThreadPool {
 public:
-    // threads <= 0: use all hardware threads.
-    explicit ThreadPool(int threads = 0);
+    // threads <= 0: use all hardware threads. lowPriority: workers run at a
+    // low OS scheduling priority (background work that must not slow down
+    // the rest).
+    explicit ThreadPool(int threads = 0, bool lowPriority = false);
     ~ThreadPool();
     ThreadPool(const ThreadPool&) = delete;
     ThreadPool& operator=(const ThreadPool&) = delete;
@@ -53,6 +55,10 @@ private:
     unsigned long long generation_ = 0;
     bool stop_ = false;
 };
+
+// Lowers the OS scheduling priority of the calling thread (background work).
+// Best effort; a no-op where unsupported.
+void lowerCurrentThreadPriority();
 
 // Runs fn over [begin, end): on `pool` when given, otherwise serially.
 inline void parallelFor(ThreadPool* pool, int begin, int end, int grain,

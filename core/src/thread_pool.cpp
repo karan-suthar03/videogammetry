@@ -2,10 +2,29 @@
 
 #include <algorithm>
 
+#if defined(_WIN32)
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#elif defined(__linux__)  // also Android
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
+
 namespace vg {
 
 namespace {
 thread_local bool tInsideChunk = false;
+}
+
+void lowerCurrentThreadPriority() {
+#if defined(_WIN32)
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
+#elif defined(__linux__)
+    // Per-thread nice value (Linux schedules threads individually).
+    setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), 10);
+#endif
 }
 
 int ThreadPool::hardwareThreads() {
@@ -13,11 +32,14 @@ int ThreadPool::hardwareThreads() {
     return n > 0 ? static_cast<int>(n) : 1;
 }
 
-ThreadPool::ThreadPool(int threads) {
+ThreadPool::ThreadPool(int threads, bool lowPriority) {
     const int total = threads > 0 ? threads : hardwareThreads();
     workers_.reserve(static_cast<std::size_t>(total - 1));
     for (int i = 1; i < total; ++i) {
-        workers_.emplace_back([this] { workerLoop(); });
+        workers_.emplace_back([this, lowPriority] {
+            if (lowPriority) lowerCurrentThreadPriority();
+            workerLoop();
+        });
     }
 }
 

@@ -1,6 +1,7 @@
 #include "videogammetry/reconstructor.h"
 
 #include <algorithm>
+#include <chrono>
 #include <climits>
 #include <cmath>
 
@@ -34,6 +35,8 @@ Reconstructor::Reconstructor(const Options& options)
     : options_(options),
       pool_(makePool(options.threads)),
       extractor_(options.processSize, options.orb, pool_.get()) {}
+
+Reconstructor::~Reconstructor() { cancelBackgroundBA(); }
 
 void Reconstructor::addFrame(const FrameView& frame) {
     if (frame.data == nullptr || frame.width <= 0 || frame.height <= 0) return;
@@ -107,6 +110,7 @@ void Reconstructor::addFeatures(FrameFeatures&& features) {
             if (++lostCount_ > options_.mapping.maxLostFrames) startNewMap();
         }
     }
+    pollBackgroundBA();
     ++frameCount_;
 }
 
@@ -521,7 +525,7 @@ void Reconstructor::addKeyframe() {
             previousPose_ = pose_;
         }
     }
-    if (mp.refineFocal && mp.focalEveryKeyframes > 0 && n % mp.focalEveryKeyframes == 0 &&
+    if (mp.refineFocal && !backgroundOwnsIntrinsics_ && mp.focalEveryKeyframes > 0 && n % mp.focalEveryKeyframes == 0 &&
         n >= mp.focalBAKeyframes) {
         std::vector<int> window{n - 1};
         for (const auto& [k, shared] : covisibleKeyframes(n - 1)) {
@@ -548,53 +552,63 @@ double Reconstructor::medianSceneDepth(const Keyframe& kf) const {
 }
 
 BAReport Reconstructor::adjust(const std::vector<int>& keyframes, int iterations, bool refineFocal) {
+    std::unique_ptr<BAJob> job = buildJob(keyframes, iterations, refineFocal);
+    if (!job) return {};
+    job->report = bundleAdjust(job->problem, job->focal, job->params, pool_.get());
+    return applyJob(*job);
+}
+
+std::unique_ptr<Reconstructor::BAJob> Reconstructor::buildJob(const std::vector<int>& keyframes, int iterations,
+                                                              bool refineFocal) const {
     const int nk = static_cast<int>(keyframes_.size());
-    if (nk < 2 || keyframes.empty()) return {};
+    if (nk < 2 || keyframes.empty()) return nullptr;
     std::vector<char> variable(static_cast<std::size_t>(nk), 0);
     for (int k : keyframes) variable[k] = 1;
 
+    auto job = std::make_unique<BAJob>();
+    job->mapEpoch = mapEpoch_;
+    job->focal = intrinsics_.fx;
+    job->keyframeCount = nk;
+    job->pointCount = static_cast<int>(points_.size());
+
     // Points seen by the keyframes being adjusted.
     std::vector<int> pointIndex(points_.size(), -1);
-    std::vector<int> pointIds;
     for (int k : keyframes) {
         for (int id : keyframes_[k].pointIds) {
             if (id >= 0 && !points_[id].bad && pointIndex[id] < 0) {
-                pointIndex[id] = static_cast<int>(pointIds.size());
-                pointIds.push_back(id);
+                pointIndex[id] = static_cast<int>(job->pointIds.size());
+                job->pointIds.push_back(id);
             }
         }
     }
-    if (pointIds.empty()) return {};
+    if (job->pointIds.empty()) return nullptr;
 
     // Cameras: every keyframe that sees those points (the adjusted ones plus
     // fixed neighbours), in keyframe order so the reduced system stays banded.
+    // With the focal free, only the adjusted keyframes (others were built with
+    // the old focal and would hold it back).
     std::vector<char> involved(static_cast<std::size_t>(nk), 0);
     if (refineFocal) {
         involved = variable;
     } else {
-        for (int id : pointIds) {
+        for (int id : job->pointIds) {
             for (const PointObservation& o : points_[id].observations) involved[o.keyframe] = 1;
         }
     }
-    BAProblem problem;
-    std::vector<int> cameraKeyframe;
-    struct ObsRef {
-        int keyframe, keypoint;
-    };
-    std::vector<ObsRef> obsRef;
+    BAProblem& problem = job->problem;
     for (int k = 0; k < nk; ++k) {
         if (!involved[k]) continue;
         const Keyframe& kf = keyframes_[k];
-        const int camera = static_cast<int>(cameraKeyframe.size());
+        const int camera = static_cast<int>(job->cameraKeyframe.size());
         for (std::size_t i = 0; i < kf.pointIds.size(); ++i) {
             const int id = kf.pointIds[i];
             if (id < 0 || points_[id].bad || pointIndex[id] < 0) continue;
             problem.observations.push_back({camera, pointIndex[id],
                                             intrinsics_.normalize(kf.rawPositions[i].x, kf.rawPositions[i].y),
                                             kf.keypoints[i].scale});
-            obsRef.push_back({k, static_cast<int>(i)});
+            job->obsRef.push_back({k, static_cast<int>(i)});
         }
-        cameraKeyframe.push_back(k);
+        job->cameraKeyframe.push_back(k);
         problem.poses.push_back(kf.pose);
         problem.fixedPose.push_back(variable[k] ? 0 : 1);
     }
@@ -603,9 +617,9 @@ BAReport Reconstructor::adjust(const std::vector<int>& keyframes, int iterations
     if (std::count(problem.fixedPose.begin(), problem.fixedPose.end(), 1) == 0) {
         for (std::size_t c = 0; c < problem.fixedPose.size() && c < 2; ++c) problem.fixedPose[c] = 1;
     }
-    for (int id : pointIds) problem.points.push_back(points_[id].position);
+    for (int id : job->pointIds) problem.points.push_back(points_[id].position);
 
-    BAParams params;
+    BAParams& params = job->params;
     params.maxIterations = iterations;
     params.outlierThresholdPx = options_.mapping.maxReprojectionErrorPx + 0.5;
     params.k1 = intrinsics_.k1;
@@ -613,33 +627,163 @@ BAReport Reconstructor::adjust(const std::vector<int>& keyframes, int iterations
     params.focalPriorSigma = options_.mapping.focalPriorSigma;
     params.refineDistortion = refineFocal && options_.mapping.refineDistortion;
     params.distortionPriorSigma = options_.mapping.distortionPriorSigma;
-    BAReport report = bundleAdjust(problem, intrinsics_.fx, params, pool_.get());
-    if (!report.ok) return report;
-    if (refineFocal) {
+    return job;
+}
+
+BAReport Reconstructor::applyJob(BAJob& job) {
+    BAReport& report = job.report;
+    if (!report.ok || job.mapEpoch != mapEpoch_) {
+        report.ok = false;
+        return report;
+    }
+    // Solved with intrinsics that have since been refined: outdated.
+    if (!job.params.refineFocal && (std::abs(intrinsics_.fx / job.focal - 1) > 0.01 ||
+                                    std::abs(intrinsics_.k1 - job.params.k1) > 0.01)) {
+        ++stats_.backgroundDiscarded;
+        report.ok = false;
+        return report;
+    }
+    if (job.params.refineFocal) {
         const bool determined = report.focalStd <= options_.mapping.focalMaxStd &&
-                                (!params.refineDistortion || report.k1Std <= options_.mapping.distortionMaxStd);
+                                (!job.params.refineDistortion || report.k1Std <= options_.mapping.distortionMaxStd);
         if (!determined) {
             ++stats_.focalRejected;  // not determined by this motion: change nothing
             report.ok = false;
             return report;
         }
         ++stats_.focalUpdates;
-        intrinsics_.fx *= report.focalScale;
-        intrinsics_.fy *= report.focalScale;
+        intrinsics_.fx = job.focal * report.focalScale;
+        intrinsics_.fy = intrinsics_.fx;
         intrinsics_.k1 = report.k1;
     }
 
-    for (std::size_t c = 0; c < cameraKeyframe.size(); ++c) {
-        if (!problem.fixedPose[c]) keyframes_[cameraKeyframe[c]].pose = problem.poses[c];
+    // New keyframe poses: the solution for the job's variable cameras, the
+    // current pose for its fixed ones.
+    const int nk = static_cast<int>(keyframes_.size());
+    std::vector<Pose> before(static_cast<std::size_t>(nk));
+    for (int k = 0; k < nk; ++k) before[k] = keyframes_[k].pose;
+    std::vector<char> placed(static_cast<std::size_t>(nk), 0);
+    for (std::size_t c = 0; c < job.cameraKeyframe.size(); ++c) {
+        const int k = job.cameraKeyframe[c];
+        if (!job.problem.fixedPose[c]) keyframes_[k].pose = job.problem.poses[c];
+        placed[k] = 1;
     }
-    for (std::size_t j = 0; j < pointIds.size(); ++j) points_[pointIds[j]].position = problem.points[j];
-    for (std::size_t o = 0; o < obsRef.size(); ++o) {
+    // Keyframes created while the job ran keep their pose relative to their
+    // most covisible placed keyframe (older keyframes outside the job stay).
+    for (int k = 0; k < std::min(nk, job.keyframeCount); ++k) placed[k] = 1;
+    const auto carry = [&](const Pose& pose, int parent) {
+        // pose' = pose o parent_before^-1 o parent_after
+        return keyframes_[parent].pose.then(before[parent].inverse()).then(pose);
+    };
+    for (int k = 0; k < nk; ++k) {
+        if (placed[k]) continue;
+        for (const auto& [other, shared] : covisibleKeyframes(k)) {
+            if (placed[other]) {
+                keyframes_[k].pose = carry(before[k], other);
+                break;
+            }
+        }
+        placed[k] = 1;
+    }
+
+    // Points: the solution for the job's points; others move with the first
+    // keyframe that sees them.
+    std::vector<char> solved(points_.size(), 0);
+    for (std::size_t j = 0; j < job.pointIds.size(); ++j) {
+        MapPoint& p = points_[job.pointIds[j]];
+        if (p.bad) continue;  // removed or merged meanwhile
+        p.position = job.problem.points[j];
+        solved[job.pointIds[j]] = 1;
+    }
+    for (std::size_t id = static_cast<std::size_t>(job.pointCount); id < points_.size(); ++id) {
+        MapPoint& p = points_[id];
+        if (p.bad || solved[id] || p.observations.empty()) continue;
+        const int k = p.observations.front().keyframe;
+        p.position = keyframes_[k].pose.inverse().transform(before[k].transform(p.position));
+    }
+
+    // Rejected observations, if still linked to the same point.
+    for (std::size_t o = 0; o < job.obsRef.size(); ++o) {
         if (report.inlier[o]) continue;
-        const int id = keyframes_[obsRef[o].keyframe].pointIds[obsRef[o].keypoint];
-        if (id >= 0) removeObservation(id, {obsRef[o].keyframe, obsRef[o].keypoint});
+        const PointObservation& ref = job.obsRef[o];
+        const int id = job.pointIds[job.problem.observations[o].point];
+        if (keyframes_[ref.keyframe].pointIds[ref.keypoint] == id) removeObservation(id, ref);
     }
-    if (refineFocal) undistortAll();
+
+    // The current frame keeps its pose relative to the newest keyframe.
+    const int last = nk - 1;
+    const Pose correction = keyframes_[last].pose.then(before[last].inverse());
+    pose_ = correction.then(pose_);
+    previousPose_ = correction.then(previousPose_);
+
+    if (job.params.refineFocal) undistortAll();
     return report;
+}
+
+void Reconstructor::cancelBackgroundBA() {
+    if (!backgroundJob_) return;
+    cancelBackground_ = true;
+    backgroundDone_.wait();
+    backgroundJob_.reset();
+    cancelBackground_ = false;
+}
+
+void Reconstructor::pollBackgroundBA() {
+    using Clock = std::chrono::steady_clock;
+    const MappingParams& mp = options_.mapping;
+    if (backgroundJob_) {
+        if (backgroundDone_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+        backgroundDone_.get();
+        const auto t0 = Clock::now();
+        const bool withIntrinsics = backgroundJob_->params.refineFocal;
+        const CameraIntrinsics local = intrinsics_;
+        if (applyJob(*backgroundJob_).ok) {
+            ++stats_.backgroundPasses;
+            stats_.backgroundLastMs = backgroundJob_->solveMs;
+            // Once the whole-map estimate agrees with the local one (both have
+            // converged), the whole-map passes own the intrinsics.
+            if (withIntrinsics && std::abs(intrinsics_.fx / local.fx - 1) < 0.005 &&
+                std::abs(intrinsics_.k1 - local.k1) < 0.005) {
+                backgroundOwnsIntrinsics_ = true;
+            }
+        } else if (withIntrinsics && backgroundJob_->report.iterations > 0) {
+            backgroundIntrinsicsFailed_ = true;  // not determined: next pass keeps them fixed
+        }
+        backgroundJob_.reset();
+        stats_.backgroundSnapshotMs += std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+    }
+    if (!mp.backgroundBA || state_ != State::Tracking ||
+        static_cast<int>(keyframes_.size()) < mp.backgroundBAMinKeyframes) {
+        return;
+    }
+
+    // Next pass over the whole map, refining the intrinsics with it (jointly
+    // with the whole map, which also repairs parts built with old intrinsics),
+    // unless the last attempt showed the motion cannot determine them.
+    const auto t0 = Clock::now();
+    std::vector<int> all(keyframes_.size());
+    for (std::size_t k = 0; k < all.size(); ++k) all[k] = static_cast<int>(k);
+    const bool intrinsics = mp.refineFocal && !backgroundIntrinsicsFailed_;
+    backgroundIntrinsicsFailed_ = false;
+    backgroundJob_ = buildJob(all, mp.backgroundBAIterations, intrinsics);
+    stats_.backgroundSnapshotMs += std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+    if (!backgroundJob_) return;
+    backgroundJob_->params.cancel = &cancelBackground_;
+    if (!backgroundPool_) {
+        // Low priority: it only uses CPU time that tracking, decoding and
+        // feature extraction leave over.
+        const int n = mp.backgroundBAThreads > 0 ? mp.backgroundBAThreads
+                                                 : std::max(1, ThreadPool::hardwareThreads() / 2);
+        if (n > 1) backgroundPool_ = std::make_unique<ThreadPool>(n, true);
+    }
+    BAJob* job = backgroundJob_.get();
+    ThreadPool* pool = backgroundPool_.get();
+    backgroundDone_ = std::async(std::launch::async, [job, pool] {
+        lowerCurrentThreadPriority();
+        const auto start = Clock::now();
+        job->report = bundleAdjust(job->problem, job->focal, job->params, pool);
+        job->solveMs = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+    });
 }
 
 void Reconstructor::undistortAll() {
@@ -903,6 +1047,7 @@ void Reconstructor::cullRecentPoints() {
 }
 
 void Reconstructor::finish() {
+    cancelBackgroundBA();  // the final global BA below supersedes it
     const int iterations = options_.mapping.globalBAIterations;
     if (iterations <= 0 || keyframes_.size() < 2) return;
     auto t = profiler_.scope("global ba");
@@ -1063,6 +1208,8 @@ void Reconstructor::startNewMap() {
     keyframes_.clear();
     points_.clear();
     recentPoints_.clear();
+    ++mapEpoch_;  // a running background pass belongs to the old map
+    backgroundOwnsIntrinsics_ = false;
     reference_ = FrameData{};
     state_ = State::Initializing;
     hasVelocity_ = false;

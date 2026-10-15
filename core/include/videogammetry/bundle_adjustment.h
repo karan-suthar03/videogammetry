@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <vector>
 
@@ -51,6 +52,9 @@ struct BAParams {
     double focalPriorSigma = 0.05;
     bool refineDistortion = false;
     double distortionPriorSigma = 0.1;
+    // Checked every iteration: when it becomes true the solve stops and the
+    // report says not ok (the problem is left in an intermediate state).
+    const std::atomic<bool>* cancel = nullptr;
 };
 
 struct BAReport {

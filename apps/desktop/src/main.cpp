@@ -36,6 +36,7 @@ void printUsage() {
         "  --center-boost <x>          extra share of features for the middle of the image, 0 = even (default 0)\n"
         "  --confirm <n>               keyframes that must see a new point to keep it, 2 = no culling (default 3)\n"
         "  --fixed-focal               keep the --fov focal length (no self-calibration)\n"
+        "  --no-background-ba          no continuous global BA on a background thread (deterministic results)\n"
         "  --fuse <n>                  covisible keyframes to fuse points with, 0 = no fusion (default 10)\n"
         "  --no-merge                  fusion only links points to free keypoints, never merges duplicates\n"
         "  --fov <deg>                 assumed field of view across the long side of the frame (default 65)\n"
@@ -109,6 +110,8 @@ int main(int argc, char** argv) {
             options.orb.centerBoost = static_cast<float>(std::strtod(argv[++i], nullptr));
         } else if (std::strcmp(argv[i], "--no-merge") == 0) {
             options.mapping.fuseMerge = false;
+        } else if (std::strcmp(argv[i], "--no-background-ba") == 0) {
+            options.mapping.backgroundBA = false;
         } else if (std::strcmp(argv[i], "--fixed-focal") == 0) {
             options.mapping.refineFocal = false;
         } else if (std::strcmp(argv[i], "--fuse") == 0 && i + 1 < argc) {
@@ -269,6 +272,19 @@ int main(int argc, char** argv) {
     const vg::PointCloud cloud = reconstructor.pointCloud();
     const std::vector<vg::Vec3> path = reconstructor.trajectory();
 
+    // Final keyframe poses (after all refinement), same columns as frames.csv.
+    if (!dumpDir.empty()) {
+        std::ofstream kfLog(std::filesystem::path(dumpDir) / "keyframes.csv");
+        kfLog << "frame,time,state,cx,cy,cz\n";
+        for (const vg::Keyframe& kf : reconstructor.keyframes()) {
+            const vg::Vec3 c = kf.pose.center();
+            char line[160];
+            std::snprintf(line, sizeof(line), "%ld,%.3f,tracking,%.5f,%.5f,%.5f\n", kf.frameIndex,
+                          info.fps > 0 ? kf.frameIndex / info.fps : 0.0, c.x, c.y, c.z);
+            kfLog << line;
+        }
+    }
+
     std::printf("frames:  %ld (last t=%.3f s), %.0f ORB features/frame avg\n",
                 index, lastTimestamp, index ? double(totalFeatures) / index : 0.0);
     if (initializedAt >= 0) {
@@ -294,6 +310,9 @@ int main(int argc, char** argv) {
                     "times, %d times not determined by the motion\n",
                     reconstructor.fovDeg(), options.fovDeg, reconstructor.distortion(), st.focalUpdates,
                     st.focalRejected);
+        std::printf("bg ba:   %d passes merged, %d discarded (intrinsics changed meanwhile); last took %.0f ms on "
+                    "its own thread; tracking thread spent %.0f ms copying/merging\n",
+                    st.backgroundPasses, st.backgroundDiscarded, st.backgroundLastMs, st.backgroundSnapshotMs);
         std::printf("points:  %d triangulated, %d culled as unconfirmed; fusion: %d merged, %d observations added\n",
                     st.pointsCreated, st.pointsCulled, st.pointsMerged, st.observationsFused);
         const vg::MapQuality q =vg::evaluateMap(reconstructor.mapPoints(), reconstructor.keyframes());

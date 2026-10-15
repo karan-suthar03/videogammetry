@@ -75,6 +75,21 @@ def main():
     step = int(sys.argv[4]) if len(sys.argv) > 4 else 5
     ref = read_colmap(images_txt, step)
     ours, times = read_ours(frames_csv)
+    # Sparse paths (e.g. keyframes.csv): interpolate positions at the
+    # reference frames between the nearest frames we have (at most 2 s apart).
+    have = sorted(ours)
+    if have:
+        fps = (have[-1] - have[0]) / max(times[have[-1]] - times[have[0]], 1e-9) if len(have) > 1 else 30.0
+        for f in sorted(ref):
+            if f in ours or f < have[0] or f > have[-1]:
+                continue
+            i = np.searchsorted(have, f)
+            a, b = have[i - 1], have[i]
+            if (b - a) / fps > 2.0:
+                continue
+            w = (f - a) / (b - a)
+            ours[f] = (1 - w) * ours[a] + w * ours[b]
+            times[f] = (1 - w) * times[a] + w * times[b]
     common = sorted(set(ref) & set(ours))
     print(f"frames: {len(ref)} in COLMAP, {len(ours)} tracked by us, {len(common)} in both")
     if len(common) < 10:

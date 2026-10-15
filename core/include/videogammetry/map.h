@@ -93,6 +93,24 @@ struct MappingParams {
     int focalBAKeyframes = 20;
     double focalMaxStd = 0.01;
     double focalPriorSigma = 0.05;
+    // Background global bundle adjustment: while frames keep being tracked,
+    // the whole map (old parts included) is re-optimized on a separate thread
+    // with `backgroundBAThreads` workers (0 = half the hardware threads), and
+    // the result merged in; keyframes and points created meanwhile move with
+    // the keyframe they are attached to. Passes run back to back at low OS
+    // priority (only using CPU time tracking leaves over) and refine the focal
+    // length and distortion jointly with the whole map (which also repairs
+    // parts built with earlier estimates). The fast local refinement runs
+    // until a pass agrees with it (both converged), then the passes own the
+    // intrinsics.
+    // If the motion cannot determine them, the next pass keeps them fixed (and
+    // is discarded if the intrinsics changed by > 1% meanwhile). Results are
+    // timing dependent; off = fully deterministic.
+    bool backgroundBA = true;
+    int backgroundBAIterations = 10;
+    int backgroundBAMinKeyframes = 10;
+    int backgroundBAThreads = 0;
+
     // Radial distortion (k1) is refined together with the focal length; the
     // result also needs k1 determined to `distortionMaxStd` (absolute).
     bool refineDistortion = true;
