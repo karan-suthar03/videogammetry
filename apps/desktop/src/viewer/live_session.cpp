@@ -60,6 +60,7 @@ void LiveSession::run() {
         done_ = true;
         return;
     }
+    reader.setMaxSize(settings_.options.processSize);  // downscale while converting to RGB
     frameCount_ = static_cast<long>(reader.info().frameCountEstimate);
     reconstructor_ = std::make_unique<vg::Reconstructor>(settings_.options);
 

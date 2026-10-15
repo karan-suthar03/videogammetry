@@ -273,18 +273,33 @@ void OrbExtractor::detectLevel(int level, int budget, std::vector<Corner>& out) 
         }
     }
 
-    // 3. Round-robin over cells, strongest first, until the level budget is filled.
+    // 3. Weighted round-robin over cells, strongest first, until the level
+    //    budget is filled: after round r a cell has taken up to r * weight
+    //    corners (weight 1 everywhere unless the center is boosted).
     for (auto& b : buckets) {
         std::sort(b.begin(), b.end(), [](const Corner& a, const Corner& c) { return a.score > c.score; });
     }
-    for (std::size_t rank = 0; static_cast<int>(out.size()) < budget; ++rank) {
-        bool any = false;
-        for (const auto& b : buckets) {
-            if (rank < b.size()) {
-                any = true;
-                out.push_back(b[rank]);
-                if (static_cast<int>(out.size()) >= budget) break;
+    std::vector<float> weight(buckets.size(), 1.0f);
+    if (params_.centerBoost > 0) {
+        const float mx = 0.5f * (x0 + x1), my = 0.5f * (y0 + y1);
+        const float halfDiagonal = 0.5f * std::hypot(float(x1 - x0), float(y1 - y0));
+        constexpr float kSigma = 0.35f;  // of the half diagonal
+        for (int r = 0; r < rows; ++r) {
+            for (int c = 0; c < cols; ++c) {
+                const float dx = (x0 + (c + 0.5f) * cell - mx) / halfDiagonal;
+                const float dy = (y0 + (r + 0.5f) * cell - my) / halfDiagonal;
+                weight[static_cast<std::size_t>(r) * cols + c] =
+                    1.0f + params_.centerBoost * std::exp(-(dx * dx + dy * dy) / (2 * kSigma * kSigma));
             }
+        }
+    }
+    std::vector<std::size_t> taken(buckets.size(), 0);
+    for (int round = 1; static_cast<int>(out.size()) < budget; ++round) {
+        bool any = false;
+        for (std::size_t i = 0; i < buckets.size() && static_cast<int>(out.size()) < budget; ++i) {
+            const std::size_t allowed = std::min(buckets[i].size(), static_cast<std::size_t>(round * weight[i]));
+            while (taken[i] < allowed && static_cast<int>(out.size()) < budget) out.push_back(buckets[i][taken[i]++]);
+            if (taken[i] < buckets[i].size()) any = true;
         }
         if (!any) break;
     }

@@ -32,6 +32,10 @@ struct OrbParams {
     int levels = 8;
     int fastThreshold = 20;      // FAST intensity threshold
     int minFastThreshold = 7;    // retried in grid cells where nothing was found
+    // Extra share of features for the middle of the image: a grid cell at the
+    // center gets (1 + centerBoost) times the features of a cell at the edge,
+    // falling off smoothly (Gaussian). 0 = spread evenly.
+    float centerBoost = 0.0f;
 };
 
 // Oriented FAST + rotated BRIEF (Rublee et al., ICCV 2011), with features

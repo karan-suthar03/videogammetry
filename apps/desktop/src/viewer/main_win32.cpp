@@ -351,6 +351,7 @@ void showUsage() {
                 L"Usage: videogammetry_viewer [video] [options]\n\n"
                 L"  --fov <deg>     assumed field of view across the long side (default 65)\n"
                 L"  --size <px>     long side of the processed frame, 0 = full size (default)\n"
+                L"  --center-boost <x>  extra share of features for the middle of the image (default 0)\n"
                 L"  --real-time     play at the video's frame rate instead of as fast as possible\n\n"
                 L"Without a video, a file dialog opens.",
                 L"Videogammetry viewer", MB_OK | MB_ICONINFORMATION);
@@ -370,6 +371,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCmd) {
             g.settings.options.fovDeg = _wtof(__wargv[++i]);
         } else if (a == L"--size" && i + 1 < __argc) {
             g.settings.options.processSize = _wtoi(__wargv[++i]);
+        } else if (a == L"--center-boost" && i + 1 < __argc) {
+            g.settings.options.orb.centerBoost = static_cast<float>(_wtof(__wargv[++i]));
         } else if (a == L"--real-time") {
             g.settings.realTime = true;
         } else if (a == L"-h" || a == L"--help" || a == L"--version") {

@@ -33,6 +33,8 @@ void printUsage() {
         "  --threads <n>               worker threads for tracking/mapping, 0 = all hardware threads (default 0)\n"
         "  --extract-workers <n>       frames whose features are extracted in parallel, 0 = all hardware threads\n"
         "  --serial                    extract features inside the reconstructor, one frame at a time\n"
+        "  --center-boost <x>          extra share of features for the middle of the image, 0 = even (default 0)\n"
+        "  --confirm <n>               keyframes that must see a new point to keep it, 2 = no culling (default 3)\n"
         "  --fov <deg>                 assumed field of view across the long side of the frame (default 65)\n"
         "  --dump <dir>                write debug images: <dir>/tracking (every --dump-every frames)\n"
         "                              and <dir>/map.bmp (top and side view of the result)\n"
@@ -100,6 +102,10 @@ int main(int argc, char** argv) {
             serial = true;
         } else if (std::strcmp(argv[i], "--extract-workers") == 0 && i + 1 < argc) {
             extractWorkers = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
+        } else if (std::strcmp(argv[i], "--center-boost") == 0 && i + 1 < argc) {
+            options.orb.centerBoost = static_cast<float>(std::strtod(argv[++i], nullptr));
+        } else if (std::strcmp(argv[i], "--confirm") == 0 && i + 1 < argc) {
+            options.mapping.minConfirmingKeyframes = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--fov") == 0 && i + 1 < argc) {
             options.fovDeg = std::strtod(argv[++i], nullptr);
         } else if (std::strcmp(argv[i], "--dump") == 0 && i + 1 < argc) {
@@ -131,6 +137,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    reader.setMaxSize(options.processSize);  // downscale while converting to RGB
     const VideoReader::Info& info = reader.info();
     std::printf("input:   %s\n", input.c_str());
     std::printf("video:   %dx%d, %.2f fps, %.2f s, codec %s",

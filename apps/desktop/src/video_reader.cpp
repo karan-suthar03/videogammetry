@@ -31,14 +31,17 @@ struct VideoReader::Impl {
     bool flushing = false;   // demuxer exhausted, draining the decoder
     bool finished = false;
 
+    AVFrame* out = nullptr;  // describes `rgb` for swscale
     std::vector<std::uint8_t> rgb;
-    int rgbStride = 0;
+    int rgbWidth = 0, rgbHeight = 0, rgbStride = 0;
+    int maxLongSide = 0;  // 0 = native size
 
     Info info;
     std::string error;
 
     ~Impl() {
-        sws_freeContext(sws);
+        sws_free_context(&sws);
+        av_frame_free(&out);
         av_frame_free(&frame);
         av_packet_free(&packet);
         avcodec_free_context(&codec);
@@ -86,24 +89,42 @@ struct VideoReader::Impl {
         }
     }
 
+    // Converts (and, with a size limit, downscales) the decoded frame to RGB
+    // in one multi-threaded swscale pass.
     bool convertToRgb() {
-        sws = sws_getCachedContext(sws,
-                                   frame->width, frame->height,
-                                   static_cast<AVPixelFormat>(frame->format),
-                                   frame->width, frame->height, AV_PIX_FMT_RGB24,
-                                   SWS_BILINEAR, nullptr, nullptr, nullptr);
         if (!sws) {
-            error = "could not create pixel format converter";
-            finished = true;
-            return false;
+            sws = sws_alloc_context();
+            if (!sws) {
+                error = "could not create pixel format converter";
+                finished = true;
+                return false;
+            }
+            sws->threads = 0;  // automatic: all cores
+            sws->flags = SWS_AREA;  // averages when downscaling (no aliasing)
         }
 
-        rgbStride = frame->width * 3;
-        rgb.resize(static_cast<std::size_t>(rgbStride) * frame->height);
+        int w = frame->width, h = frame->height;
+        const int longSide = w > h ? w : h;
+        if (maxLongSide > 0 && longSide > maxLongSide) {
+            const double s = double(maxLongSide) / longSide;
+            w = static_cast<int>(w * s + 0.5);
+            h = static_cast<int>(h * s + 0.5);
+        }
+        rgbWidth = w;
+        rgbHeight = h;
+        rgbStride = w * 3;
+        rgb.resize(static_cast<std::size_t>(rgbStride) * h);
 
-        std::uint8_t* dst[4] = {rgb.data(), nullptr, nullptr, nullptr};
-        int dstStride[4] = {rgbStride, 0, 0, 0};
-        sws_scale(sws, frame->data, frame->linesize, 0, frame->height, dst, dstStride);
+        if (!out) out = av_frame_alloc();
+        av_frame_unref(out);
+        out->width = w;
+        out->height = h;
+        out->format = AV_PIX_FMT_RGB24;
+        out->data[0] = rgb.data();
+        out->linesize[0] = rgbStride;
+        const int ret = sws_scale_frame(sws, out, frame);
+        out->data[0] = nullptr;  // the buffer belongs to `rgb`
+        if (ret < 0) return fail("convert to RGB", ret);
         return true;
     }
 };
@@ -173,6 +194,8 @@ bool VideoReader::open(const std::string& path, std::string& error) {
 
 const VideoReader::Info& VideoReader::info() const { return impl_->info; }
 
+void VideoReader::setMaxSize(int longSide) { impl_->maxLongSide = longSide > 0 ? longSide : 0; }
+
 const std::string& VideoReader::lastError() const { return impl_->error; }
 
 bool VideoReader::read(vg::FrameView& out) {
@@ -184,8 +207,8 @@ bool VideoReader::read(vg::FrameView& out) {
     if (!d.convertToRgb()) return false;
 
     out.data = d.rgb.data();
-    out.width = d.frame->width;
-    out.height = d.frame->height;
+    out.width = d.rgbWidth;
+    out.height = d.rgbHeight;
     out.stride = d.rgbStride;
     out.format = vg::FrameView::Format::RGB8;
     out.timestamp = pts == AV_NOPTS_VALUE ? 0.0 : pts * av_q2d(d.timeBase);
