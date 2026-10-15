@@ -96,7 +96,7 @@ public:
 
     // Most recent frame: features (processed-image pixels), map point tracked
     // by each keypoint (-1 if none), pose, and whether it became a keyframe.
-    const std::vector<Keypoint>& lastKeypoints() const { return keypoints_; }
+    const std::vector<Keypoint>& lastKeypoints() const { return rawKeypoints_; }
     const std::vector<int>& lastTrackedPoints() const { return trackedPoints_; }
     int lastTrackedCount() const { return trackedCount_; }
     const Pose& lastPose() const { return pose_; }
@@ -107,6 +107,8 @@ public:
     const CameraIntrinsics& intrinsics() const { return intrinsics_; }
     // Current field of view across the long side, from the focal length.
     double fovDeg() const;
+    // Current radial distortion estimate (k1, see CameraIntrinsics).
+    double distortion() const { return intrinsics_.k1; }
     // Input-frame pixels per processed-image pixel (>= 1).
     float processScale() const { return processScale_; }
     // Threads used per frame (including the caller).
@@ -116,6 +118,7 @@ private:
     struct FrameData {
         long index = -1;
         std::vector<Keypoint> keypoints;
+        std::vector<Vec2> rawPositions;
         std::vector<Descriptor> descriptors;
         std::vector<std::array<std::uint8_t, 3>> colors;
     };
@@ -155,6 +158,9 @@ private:
     // and the result is applied only if the focal length is well determined.
     BAReport adjust(const std::vector<int>& keyframes, int iterations, bool refineFocal = false);
     void startNewMap();
+    // Recomputes undistorted keypoint positions (keyframes and current frame)
+    // after the intrinsics changed.
+    void undistortAll();
 
     Options options_;
     std::unique_ptr<ThreadPool> pool_;  // null when single-threaded; declared before extractor_
@@ -172,6 +178,8 @@ private:
     std::vector<Keypoint> keypoints_;
     std::vector<Descriptor> descriptors_;
     std::vector<std::array<std::uint8_t, 3>> colors_;
+    std::vector<Keypoint> rawKeypoints_;  // current frame as detected (for display)
+    std::vector<Vec2> rawPositions_;
     std::vector<int> trackedPoints_;
     std::vector<int> previousTracked_;  // map point ids tracked in the previous frame
     int trackedCount_ = 0;

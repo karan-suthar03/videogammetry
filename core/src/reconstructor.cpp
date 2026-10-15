@@ -52,7 +52,15 @@ void Reconstructor::addFeatures(FrameFeatures&& features) {
         imageHeight_ = features.height;
         intrinsics_ = CameraIntrinsics::fromFov(features.width, features.height, options_.fovDeg);
     }
-    keypoints_ = std::move(features.keypoints);
+    rawKeypoints_ = std::move(features.keypoints);
+    rawPositions_.resize(rawKeypoints_.size());
+    keypoints_ = rawKeypoints_;
+    for (std::size_t i = 0; i < keypoints_.size(); ++i) {
+        rawPositions_[i] = {rawKeypoints_[i].x, rawKeypoints_[i].y};
+        const Vec2 u = intrinsics_.undistortPixel(rawKeypoints_[i].x, rawKeypoints_[i].y);
+        keypoints_[i].x = static_cast<float>(u.x);
+        keypoints_[i].y = static_cast<float>(u.y);
+    }
     descriptors_ = std::move(features.descriptors);
     colors_ = std::move(features.colors);
 
@@ -107,6 +115,7 @@ void Reconstructor::tryInitialize() {
     FrameData current;
     current.index = static_cast<long>(frameCount_);
     current.keypoints = keypoints_;
+    current.rawPositions = rawPositions_;
     current.descriptors = descriptors_;
     current.colors = colors_;
 
@@ -171,12 +180,14 @@ void Reconstructor::tryInitialize() {
     Keyframe k1, k2;
     k1.frameIndex = reference_.index;
     k1.keypoints = reference_.keypoints;
+    k1.rawPositions = reference_.rawPositions;
     k1.descriptors = reference_.descriptors;
     k1.colors = reference_.colors;
     k1.pointIds.assign(k1.keypoints.size(), -1);
     k2.frameIndex = current.index;
     k2.pose = {second.R, second.t * s};
     k2.keypoints = current.keypoints;
+    k2.rawPositions = current.rawPositions;
     k2.descriptors = current.descriptors;
     k2.colors = current.colors;
     k2.pointIds.assign(k2.keypoints.size(), -1);
@@ -453,6 +464,7 @@ void Reconstructor::addKeyframe() {
     kf.frameIndex = static_cast<long>(frameCount_);
     kf.pose = pose_;
     kf.keypoints = keypoints_;
+    kf.rawPositions = rawPositions_;
     kf.descriptors = descriptors_;
     kf.colors = colors_;
     kf.pointIds.assign(kf.keypoints.size(), -1);
@@ -578,7 +590,7 @@ BAReport Reconstructor::adjust(const std::vector<int>& keyframes, int iterations
             const int id = kf.pointIds[i];
             if (id < 0 || points_[id].bad || pointIndex[id] < 0) continue;
             problem.observations.push_back({camera, pointIndex[id],
-                                            intrinsics_.normalize(kf.keypoints[i].x, kf.keypoints[i].y),
+                                            intrinsics_.normalize(kf.rawPositions[i].x, kf.rawPositions[i].y),
                                             kf.keypoints[i].scale});
             obsRef.push_back({k, static_cast<int>(i)});
         }
@@ -596,12 +608,17 @@ BAReport Reconstructor::adjust(const std::vector<int>& keyframes, int iterations
     BAParams params;
     params.maxIterations = iterations;
     params.outlierThresholdPx = options_.mapping.maxReprojectionErrorPx + 0.5;
+    params.k1 = intrinsics_.k1;
     params.refineFocal = refineFocal;
     params.focalPriorSigma = options_.mapping.focalPriorSigma;
+    params.refineDistortion = refineFocal && options_.mapping.refineDistortion;
+    params.distortionPriorSigma = options_.mapping.distortionPriorSigma;
     BAReport report = bundleAdjust(problem, intrinsics_.fx, params, pool_.get());
     if (!report.ok) return report;
     if (refineFocal) {
-        if (!(report.focalStd <= options_.mapping.focalMaxStd)) {
+        const bool determined = report.focalStd <= options_.mapping.focalMaxStd &&
+                                (!params.refineDistortion || report.k1Std <= options_.mapping.distortionMaxStd);
+        if (!determined) {
             ++stats_.focalRejected;  // not determined by this motion: change nothing
             report.ok = false;
             return report;
@@ -609,6 +626,7 @@ BAReport Reconstructor::adjust(const std::vector<int>& keyframes, int iterations
         ++stats_.focalUpdates;
         intrinsics_.fx *= report.focalScale;
         intrinsics_.fy *= report.focalScale;
+        intrinsics_.k1 = report.k1;
     }
 
     for (std::size_t c = 0; c < cameraKeyframe.size(); ++c) {
@@ -620,7 +638,23 @@ BAReport Reconstructor::adjust(const std::vector<int>& keyframes, int iterations
         const int id = keyframes_[obsRef[o].keyframe].pointIds[obsRef[o].keypoint];
         if (id >= 0) removeObservation(id, {obsRef[o].keyframe, obsRef[o].keypoint});
     }
+    if (refineFocal) undistortAll();
     return report;
+}
+
+void Reconstructor::undistortAll() {
+    for (Keyframe& kf : keyframes_) {
+        for (std::size_t i = 0; i < kf.keypoints.size(); ++i) {
+            const Vec2 u = intrinsics_.undistortPixel(kf.rawPositions[i].x, kf.rawPositions[i].y);
+            kf.keypoints[i].x = static_cast<float>(u.x);
+            kf.keypoints[i].y = static_cast<float>(u.y);
+        }
+    }
+    for (std::size_t i = 0; i < keypoints_.size(); ++i) {
+        const Vec2 u = intrinsics_.undistortPixel(rawPositions_[i].x, rawPositions_[i].y);
+        keypoints_[i].x = static_cast<float>(u.x);
+        keypoints_[i].y = static_cast<float>(u.y);
+    }
 }
 
 int Reconstructor::createPoint(MapPoint point, PointObservation a, PointObservation b) {

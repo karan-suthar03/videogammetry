@@ -28,7 +28,8 @@ struct MapPoint {
 struct Keyframe {
     long frameIndex = 0;  // index of the video frame
     Pose pose;            // world -> camera
-    std::vector<Keypoint> keypoints;
+    std::vector<Keypoint> keypoints;  // positions undistorted (pinhole) with the current intrinsics
+    std::vector<Vec2> rawPositions;   // as detected (distorted), for re-undistortion and BA
     std::vector<Descriptor> descriptors;
     std::vector<std::array<std::uint8_t, 3>> colors;  // RGB at each keypoint
     std::vector<int> pointIds;                         // map point per keypoint, -1 if none
@@ -92,6 +93,11 @@ struct MappingParams {
     int focalBAKeyframes = 20;
     double focalMaxStd = 0.01;
     double focalPriorSigma = 0.05;
+    // Radial distortion (k1) is refined together with the focal length; the
+    // result also needs k1 determined to `distortionMaxStd` (absolute).
+    bool refineDistortion = true;
+    double distortionMaxStd = 0.01;
+    double distortionPriorSigma = 0.1;
 
     // Culling of new points: a point must be seen by at least
     // `minConfirmingKeyframes` keyframes once `probationKeyframes` more

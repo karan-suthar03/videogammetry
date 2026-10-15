@@ -17,7 +17,24 @@ struct CameraIntrinsics {
     // from one camera).
     static CameraIntrinsics fromFov(int width, int height, double longSideFovDeg);
 
+    // Radial distortion (SIMPLE_RADIAL, as COLMAP): an ideal normalized point
+    // p is observed at (1 + k1 |p|^2) p. 0 = pinhole.
+    double k1 = 0;
+
     Vec2 normalize(double u, double v) const { return {(u - cx) / fx, (v - cy) / fy}; }
+
+    // Pinhole (undistorted) pixel position of an observed pixel.
+    Vec2 undistortPixel(double u, double v) const {
+        if (k1 == 0) return {u, v};
+        const double xd = (u - cx) / fx, yd = (v - cy) / fy;
+        double x = xd, y = yd;
+        for (int i = 0; i < 10; ++i) {  // fixed point: x = xd / (1 + k1 |x|^2)
+            const double d = 1 + k1 * (x * x + y * y);
+            x = xd / d;
+            y = yd / d;
+        }
+        return {fx * x + cx, fy * y + cy};
+    }
 };
 
 struct TwoViewParams {

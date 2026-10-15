@@ -217,8 +217,8 @@ void drawHud(HDC dc) {
         line(buf, dim);
         if (s.fovDeg > 0) {
             if (s.focalUpdates > 0) {
-                swprintf(buf, 512, L"field of view: %.1f deg (estimated, %d refinements; started from %.1f)", s.fovDeg,
-                         s.focalUpdates, s.startFovDeg);
+                swprintf(buf, 512, L"field of view: %.1f deg, lens distortion k1 %.3f (estimated, %d refinements; "
+                         L"started from %.1f deg)", s.fovDeg, s.k1, s.focalUpdates, s.startFovDeg);
             } else {
                 swprintf(buf, 512, L"field of view: %.1f deg (assumed; the motion has not determined it yet)", s.fovDeg);
             }

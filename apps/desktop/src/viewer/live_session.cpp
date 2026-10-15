@@ -224,6 +224,7 @@ void LiveSession::publish(const vg::FrameView* frame, double processingFps, bool
     s->fovDeg = r.fovDeg();
     s->startFovDeg = settings_.options.fovDeg;
     s->focalUpdates = r.stats().focalUpdates;
+    s->k1 = r.distortion();
     s->processingFps = processingFps;
 
     std::lock_guard<std::mutex> lock(mutex_);

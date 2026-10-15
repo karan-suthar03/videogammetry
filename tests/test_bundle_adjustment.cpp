@@ -152,6 +152,24 @@ int main() {
     check(std::abs(recovered - focal) < 0.01 * focal, "focal recovered within 1% (start: 20% off)", recovered);
     check(fr.focalStd < 0.02, "focal well determined by this motion (std < 2%)", fr.focalStd);
 
+    // Focal and radial distortion: the camera has barrel distortion k1 = -0.12
+    // (observed position (1 + k1 |p|^2) p) and the focal starts 20% short.
+    const double trueK1 = -0.12;
+    vg::BAProblem distProblem = s.problem;
+    for (vg::BAObservation& ob : distProblem.observations) {
+        const double d = 1 + trueK1 * (ob.xy.x * ob.xy.x + ob.xy.y * ob.xy.y);
+        ob.xy = {ob.xy.x * d * focal / wrongFocal, ob.xy.y * d * focal / wrongFocal};
+    }
+    vg::BAParams distParams = focalParams;
+    distParams.refineDistortion = true;
+    const vg::BAReport dr = vg::bundleAdjust(distProblem, wrongFocal, distParams, &pool);
+    std::printf("  focal + distortion: focal %.1f px (true %.0f), k1 %.4f (true %.2f), std %.2f%% / %.4f, RMS %.2f px\n",
+                dr.focalScale * wrongFocal, focal, dr.k1, trueK1, 100 * dr.focalStd, dr.k1Std, dr.finalRmsPx);
+    check(std::abs(dr.focalScale * wrongFocal - focal) < 0.01 * focal, "focal recovered within 1% with distortion",
+          dr.focalScale * wrongFocal);
+    check(std::abs(dr.k1 - trueK1) < 0.01, "k1 recovered within 0.01", dr.k1);
+    check(dr.finalRmsPx < 0.9, "inlier RMS at noise level with distortion modelled", dr.finalRmsPx);
+
     std::printf("%s\n", failures ? "FAILED" : "OK");
     return failures ? 1 : 0;
 }
