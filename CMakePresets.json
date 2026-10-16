@@ -9,6 +9,13 @@
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
     },
     {
+      "name": "windows-static",
+      "displayName": "Windows (MSVC), self-contained exes",
+      "inherits": "windows",
+      "binaryDir": "${sourceDir}/build/windows-static",
+      "cacheVariables": { "VG_STATIC": "ON" }
+    },
+    {
       "name": "linux",
       "displayName": "Linux (Ninja)",
       "generator": "Ninja Multi-Config",
@@ -19,6 +26,7 @@
   "buildPresets": [
     { "name": "windows-release", "configurePreset": "windows", "configuration": "Release" },
     { "name": "windows-debug",   "configurePreset": "windows", "configuration": "Debug" },
+    { "name": "windows-static-release", "configurePreset": "windows-static", "configuration": "Release" },
     { "name": "linux-release",   "configurePreset": "linux",   "configuration": "Release" },
     { "name": "linux-debug",     "configurePreset": "linux",   "configuration": "Debug" }
   ]
