@@ -18,8 +18,8 @@ void FeatureExtractor::extract(const FrameView& frame, long index, FrameFeatures
     const int longSide = std::max(frame.width, frame.height);
     if (processSize_ > 0 && longSide > processSize_) {
         const double s = double(longSide) / processSize_;
-        const int w = static_cast<int>(std::lround(frame.width / s));
-        const int h = static_cast<int>(std::lround(frame.height / s));
+        const int w = std::max(1, static_cast<int>(std::lround(frame.width / s)));
+        const int h = std::max(1, static_cast<int>(std::lround(frame.height / s)));
         resizeBilinear(gray_, w, h, processed_, pool_);
         out.processScale = float(frame.width) / w;
         input = &processed_;

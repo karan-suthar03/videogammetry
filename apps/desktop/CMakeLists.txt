@@ -25,6 +25,7 @@ if(WIN32)
         src/viewer/renderer.cpp
     )
     target_include_directories(videogammetry_viewer PRIVATE src/viewer)
+    target_sources(videogammetry_viewer PRIVATE src/viewer/settings_table.cpp)
     target_link_libraries(videogammetry_viewer PRIVATE videogammetry::core videogammetry_video comdlg32 winmm)
     target_compile_definitions(videogammetry_viewer PRIVATE UNICODE _UNICODE)
     list(APPEND _targets videogammetry_viewer)

@@ -162,7 +162,13 @@ std::vector<BriefTest> randomBriefTests(int count, std::uint32_t seed) {
 }
 
 OrbExtractor::OrbExtractor(const OrbParams& params, ThreadPool* pool) : params_(params), pool_(pool) {
-    const int levels = std::max(params_.levels, 1);
+    // Levels past a 2^16 downscale are empty for any real image (see
+    // buildPyramid), so a huge level count does not allocate them.
+    int levels = std::max(params_.levels, 1);
+    if (params_.scaleFactor > 1.0f) {
+        const double useful = 1.0 + std::floor(std::log(65536.0) / std::log(double(params_.scaleFactor)));
+        levels = static_cast<int>(std::min<double>(levels, useful));
+    }
     scales_.resize(levels);
     budgets_.resize(levels);
     pyramid_.resize(levels);
@@ -197,7 +203,7 @@ void OrbExtractor::buildPyramid(const Image& gray) {
 
 void OrbExtractor::detectLevel(int level, int budget, std::vector<Corner>& out) {
     const Image& img = pyramid_[level];
-    if (img.empty() || budget <= 0) return;
+    if (img.width <= 2 * kBorder || img.height <= 2 * kBorder || budget <= 0) return;  // too small for any corner
 
     const int x0 = kBorder, x1 = img.width - kBorder;
     const int y0 = kBorder, y1 = img.height - kBorder;

@@ -1,6 +1,7 @@
 // Live viewer for Windows: plays a video through the reconstruction and
 // shows the point cloud, keyframes and current camera as they are built.
-// Plain Win32 + GDI; the 3D view is rendered on the CPU (renderer.h).
+// Starts on a menu (open a video, recent videos, every setting); Esc returns
+// to it. Plain Win32 + GDI; the 3D view is rendered on the CPU (renderer.h).
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -12,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cwchar>
+#include <cwctype>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -20,6 +22,7 @@
 #include "live_session.h"
 #include "power.h"
 #include "renderer.h"
+#include "settings_table.h"
 #include "videogammetry/version.h"
 
 namespace {
@@ -27,15 +30,25 @@ namespace {
 constexpr UINT_PTR kTimer = 1;
 constexpr wchar_t kClassName[] = L"VideogammetryViewer";
 
+constexpr std::size_t kMaxRecent = 6;
+
+// One selectable line of the start menu.
+struct MenuItem {
+    enum class Kind { Open, Resume, Restart, Recent, Reset, Quit, Setting } kind;
+    int index = 0;  // into App::recent or App::entries
+};
+
 struct App {
     HWND hwnd = nullptr;
-    LiveSession::Settings settings;
+    ViewerSettings cfg;
+    std::vector<SettingEntry> entries = settingEntries(cfg);
+    std::vector<std::string> recent;  // UTF-8 paths, newest first
+    std::filesystem::path settingsFile;
     std::unique_ptr<LiveSession> session;
     std::wstring videoPath;
     std::shared_ptr<const LiveSnapshot> scene = std::make_shared<LiveSnapshot>();
 
     OrbitView view;
-    RenderOptions renderOptions;
     SceneRenderer renderer;
     bool dirty = true;
     std::wstring notice;  // last save result etc.
@@ -46,8 +59,17 @@ struct App {
     HGDIOBJ oldBitmap = nullptr;
     std::uint32_t* pixels = nullptr;
     int width = 0, height = 0;
-    HFONT font = nullptr;
+    HFONT font = nullptr, titleFont = nullptr;
     int fontDpi = 0;
+
+    // Start menu.
+    bool menu = true;
+    int selected = 0;      // into menuItems()
+    int scroll = 0;        // first settings line shown
+    bool editing = false;  // typing a value for the selected setting
+    bool editFresh = false;  // the first key typed replaces the shown value
+    std::wstring editText;
+    std::vector<std::pair<RECT, int>> hits;  // clickable rows of the last paint -> item
 
     // Mouse drag.
     enum class Drag { None, Orbit, Pan } drag = Drag::None;
@@ -78,10 +100,21 @@ void updateTitle() {
     SetWindowTextW(g.hwnd, title.c_str());
 }
 
+void saveConfig() {
+    if (!g.settingsFile.empty()) saveSettings(g.settingsFile, g.cfg, g.recent);
+}
+
 void startSession(const std::wstring& path) {
     g.session.reset();  // stops the previous one
+    g.menu = false;
+    g.editing = false;
+    const std::string utf8 = toUtf8(path);
+    std::erase(g.recent, utf8);
+    g.recent.insert(g.recent.begin(), utf8);
+    if (g.recent.size() > kMaxRecent) g.recent.resize(kMaxRecent);
+    saveConfig();
     g.videoPath = path;
-    g.session = std::make_unique<LiveSession>(toUtf8(path), g.settings);
+    g.session = std::make_unique<LiveSession>(toUtf8(path), g.cfg.session);
     g.scene = std::make_shared<LiveSnapshot>();
     g.view.reset();
     g.notice.clear();
@@ -158,9 +191,12 @@ void ensureFont() {
     const int dpi = static_cast<int>(GetDpiForWindow(g.hwnd));
     if (g.font && dpi == g.fontDpi) return;
     if (g.font) DeleteObject(g.font);
+    if (g.titleFont) DeleteObject(g.titleFont);
     g.fontDpi = dpi;
     g.font = CreateFontW(-MulDiv(10, dpi, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH, L"Consolas");
+    g.titleFont = CreateFontW(-MulDiv(20, dpi, 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                              OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Segoe UI");
 }
 
 const wchar_t* stateName(vg::Reconstructor::State s) {
@@ -230,7 +266,7 @@ void drawHud(HDC dc) {
 
     const wchar_t* help[] = {
         L"left-drag orbit   right-drag pan   wheel zoom   C look through camera   F follow camera   R reset view",
-        L"Space pause   M real-time/max speed   T highlight tracked   K keyframes   +/- point size   O open   S save .ply",
+        L"Space pause   M real-time/max speed   T highlight tracked   K keyframes   +/- point size   O open   S save .ply   Esc menu",
         L"red: current camera   blue: keyframes   orange: camera path   green: points tracked in this frame",
     };
     int hy = g.height - margin - lineH * 3;
@@ -244,6 +280,324 @@ void drawHud(HDC dc) {
     SelectObject(dc, oldFont);
 }
 
+// ---- Start menu --------------------------------------------------------------
+
+std::vector<MenuItem> menuItems() {
+    using K = MenuItem::Kind;
+    std::vector<MenuItem> items{{K::Open}};
+    if (g.session) items.push_back({K::Resume});
+    if (!g.videoPath.empty()) items.push_back({K::Restart});
+    for (int i = 0; i < static_cast<int>(g.recent.size()); ++i) items.push_back({K::Recent, i});
+    items.push_back({K::Reset});
+    items.push_back({K::Quit});
+    for (int i = 0; i < static_cast<int>(g.entries.size()); ++i) items.push_back({K::Setting, i});
+    return items;
+}
+
+const SettingEntry* selectedSetting() {
+    const std::vector<MenuItem> items = menuItems();
+    if (g.selected < 0 || g.selected >= static_cast<int>(items.size())) return nullptr;
+    const MenuItem& it = items[g.selected];
+    return it.kind == MenuItem::Kind::Setting ? &g.entries[it.index] : nullptr;
+}
+
+void showMenu() {
+    if (g.menu) return;
+    g.menu = true;
+    if (g.session) g.session->setPaused(true);  // Resume continues it
+    g.selected = 0;
+    g.dirty = true;
+}
+
+void beginEdit(const SettingEntry& e) {
+    g.editing = true;
+    g.editFresh = true;
+    g.editText = fromUtf8(formatSettingValue(e));
+}
+
+void commitEdit() {
+    if (!g.editing) return;
+    g.editing = false;
+    const SettingEntry* e = selectedSetting();
+    if (!e) return;
+    std::wstring text = g.editText;
+    for (wchar_t& c : text) c = static_cast<wchar_t>(std::towlower(c));
+    if (text == L"max") text = L"inf";
+    if (text == L"min") text = L"-inf";
+    double v;
+    if (!parseSettingValue(toUtf8(text), v)) {
+        g.notice = L"\"" + g.editText + L"\" is not a number.";
+        return;
+    }
+    const double stored = setSettingValue(*e, v);
+    g.notice = stored == v ? std::wstring()
+                           : fromUtf8(std::string(e->label) + " set to " + formatSettingValue(*e) +
+                                      " (the nearest allowed value)");
+    saveConfig();
+}
+
+void adjustSetting(const SettingEntry& e, int dir) {
+    const double v = settingValue(e);
+    if (isBool(e)) {
+        setSettingValue(e, v != 0 ? 0 : 1);
+    } else if (GetKeyState(VK_CONTROL) < 0) {  // double / halve: reaches extremes fast
+        setSettingValue(e, v == 0 ? dir * e.step : (dir > 0 ? v * 2 : v / 2));
+    } else {
+        setSettingValue(e, v + dir * e.step * (GetKeyState(VK_SHIFT) < 0 ? 10 : 1));
+    }
+    g.notice.clear();
+    saveConfig();
+}
+
+void activate(const MenuItem& it) {
+    using K = MenuItem::Kind;
+    switch (it.kind) {
+        case K::Open: openVideoDialog(); break;
+        case K::Resume:
+            g.menu = false;
+            g.session->setPaused(false);
+            break;
+        case K::Restart: startSession(g.videoPath); break;
+        case K::Recent: {
+            const std::wstring path = fromUtf8(g.recent[it.index]);
+            if (std::filesystem::exists(path)) {
+                startSession(path);
+            } else {
+                g.notice = L"Not found: " + path;
+                g.recent.erase(g.recent.begin() + it.index);
+                saveConfig();
+            }
+            break;
+        }
+        case K::Reset:
+            g.cfg = ViewerSettings{};  // entries point into g.cfg, so they stay valid
+            g.notice = L"All settings reset to their defaults.";
+            saveConfig();
+            break;
+        case K::Quit: DestroyWindow(g.hwnd); return;
+        case K::Setting: {
+            const SettingEntry& e = g.entries[it.index];
+            if (isBool(e)) {
+                adjustSetting(e, 1);
+            } else {
+                beginEdit(e);
+            }
+            break;
+        }
+    }
+    g.dirty = true;
+}
+
+void onMenuKey(WPARAM key) {
+    if (g.editing) {
+        if (key == VK_RETURN) {
+            commitEdit();
+        } else if (key == VK_ESCAPE) {
+            g.editing = false;
+        } else if (key == VK_BACK) {
+            if (g.editFresh) g.editText.clear();
+            if (!g.editText.empty()) g.editText.pop_back();
+            g.editFresh = false;
+        } else {
+            return;
+        }
+        g.dirty = true;
+        return;
+    }
+    const std::vector<MenuItem> items = menuItems();
+    const int last = static_cast<int>(items.size()) - 1;
+    const SettingEntry* e = selectedSetting();
+    switch (key) {
+        case VK_UP: g.selected = std::max(g.selected - 1, 0); break;
+        case VK_DOWN: g.selected = std::min(g.selected + 1, last); break;
+        case VK_PRIOR: g.selected = std::max(g.selected - 10, 0); break;
+        case VK_NEXT: g.selected = std::min(g.selected + 10, last); break;
+        case VK_HOME: g.selected = 0; break;
+        case VK_END: g.selected = last; break;
+        case VK_LEFT:
+        case VK_RIGHT:
+            if (e) adjustSetting(*e, key == VK_RIGHT ? 1 : -1);
+            break;
+        case VK_RETURN:
+        case VK_SPACE: activate(items[g.selected]); return;
+        case VK_ESCAPE:
+            if (g.session) {
+                activate({MenuItem::Kind::Resume});
+            } else {
+                DestroyWindow(g.hwnd);
+            }
+            return;
+        case 'O':
+            if (GetKeyState(VK_CONTROL) < 0 || !e) openVideoDialog();
+            break;
+        default: return;
+    }
+    g.dirty = true;
+}
+
+void onMenuChar(wchar_t c) {
+    if (c < 0x20 || c == 0x7f) return;  // Enter, Esc, Backspace: see onMenuKey
+    if (!g.editing) {
+        // Typing a number on a numeric setting starts entering a new value.
+        const SettingEntry* e = selectedSetting();
+        if (!e || isBool(*e) || !(std::iswdigit(c) || c == L'-' || c == L'.')) return;
+        beginEdit(*e);
+    }
+    if (g.editFresh) g.editText.clear();
+    g.editFresh = false;
+    if (g.editText.size() < 40) g.editText += c;
+    g.dirty = true;
+}
+
+void onMenuClick(POINT p) {
+    for (const auto& [rc, item] : g.hits) {
+        if (!PtInRect(&rc, p)) continue;
+        const bool same = item == g.selected;
+        commitEdit();
+        g.selected = item;
+        if (!(same && g.editing)) activate(menuItems()[item]);
+        g.dirty = true;
+        return;
+    }
+    commitEdit();
+    g.dirty = true;
+}
+
+void drawMenu(HDC dc, int w, int h) {
+    ensureFont();
+    RECT all{0, 0, w, h};
+    HBRUSH bg = CreateSolidBrush(RGB(22, 24, 28));
+    FillRect(dc, &all, bg);
+    DeleteObject(bg);
+    SetBkMode(dc, TRANSPARENT);
+    g.hits.clear();
+
+    const COLORREF white = RGB(235, 235, 235), dim = RGB(150, 155, 165), accent = RGB(140, 220, 255),
+                   changed = RGB(255, 200, 110);
+    HGDIOBJ oldFont = SelectObject(dc, g.titleFont);
+    const int margin = MulDiv(24, g.fontDpi, 96);
+    SetTextColor(dc, white);
+    TextOutW(dc, margin, margin, L"Videogammetry", 13);
+    TEXTMETRICW tm{};
+    GetTextMetricsW(dc, &tm);
+    int top = margin + tm.tmHeight + margin / 2;
+
+    SelectObject(dc, g.font);
+    GetTextMetricsW(dc, &tm);
+    const int lineH = tm.tmHeight + 2, rowH = lineH + MulDiv(6, g.fontDpi, 96), cw = tm.tmAveCharWidth;
+    const int pad = cw;
+    HBRUSH selBrush = CreateSolidBrush(RGB(48, 60, 84)), editBrush = CreateSolidBrush(RGB(70, 60, 30));
+    const auto text = [&](int x, int y, const std::wstring& s, COLORREF c) {
+        SetTextColor(dc, c);
+        TextOutW(dc, x, y, s.c_str(), static_cast<int>(s.size()));
+    };
+    const auto row = [&](int item, RECT rc) {
+        g.hits.push_back({rc, item});
+        if (item == g.selected) FillRect(dc, &rc, g.editing ? editBrush : selBrush);
+    };
+
+    const std::vector<MenuItem> items = menuItems();
+    g.selected = std::clamp(g.selected, 0, static_cast<int>(items.size()) - 1);
+    const std::wstring version = L"version " + fromUtf8(vg::version());
+    text(margin, top, version, dim);
+    top += lineH + margin / 2;
+
+    // Left column: actions and recent videos.
+    const int colW = 44 * cw;
+    const std::wstring current = std::filesystem::path(g.videoPath).filename().wstring();
+    int y = top;
+    bool recentHeader = false;
+    for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+        const MenuItem& it = items[i];
+        if (it.kind == MenuItem::Kind::Setting) break;
+        std::wstring label;
+        switch (it.kind) {
+            case MenuItem::Kind::Open: label = L"Open video...                 O"; break;
+            case MenuItem::Kind::Resume: label = L"Resume " + current + L"         Esc"; break;
+            case MenuItem::Kind::Restart: label = L"Restart " + current + L" with these settings"; break;
+            case MenuItem::Kind::Recent: label = std::filesystem::path(fromUtf8(g.recent[it.index])).filename().wstring(); break;
+            case MenuItem::Kind::Reset: label = L"Reset all settings to defaults"; break;
+            case MenuItem::Kind::Quit: label = g.session ? L"Quit" : L"Quit                          Esc"; break;
+            case MenuItem::Kind::Setting: break;
+        }
+        if (it.kind == MenuItem::Kind::Recent && !recentHeader) {
+            y += lineH / 2;
+            text(margin, y, L"Recent videos", accent);
+            y += lineH + 2;
+            recentHeader = true;
+        }
+        if (it.kind == MenuItem::Kind::Reset) y += lineH / 2;
+        row(i, {margin, y, margin + colW, y + rowH});
+        text(margin + pad, y + (rowH - lineH) / 2, label, white);
+        y += rowH;
+    }
+
+    // Right column: every setting, grouped, scrolling with the selection.
+    const int x1 = margin * 2 + colW, footerH = lineH * 4 + margin;
+    const int visible = std::max(1, (h - top - footerH) / rowH);
+    struct Line { const char* header; int item; };
+    std::vector<Line> lines;
+    const char* section = nullptr;
+    int selLine = -1;
+    for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+        if (items[i].kind != MenuItem::Kind::Setting) continue;
+        const SettingEntry& e = g.entries[items[i].index];
+        if (!section || std::string(section) != e.section) {
+            section = e.section;
+            lines.push_back({section, -1});
+        }
+        if (i == g.selected) selLine = static_cast<int>(lines.size());
+        lines.push_back({nullptr, i});
+    }
+    if (selLine >= 0) {
+        if (selLine < g.scroll + 1) g.scroll = std::max(0, selLine - 1);  // keep its heading in view too
+        if (selLine >= g.scroll + visible) g.scroll = selLine - visible + 1;
+    }
+    g.scroll = std::clamp(g.scroll, 0, std::max(0, static_cast<int>(lines.size()) - visible));
+
+    static ViewerSettings defaults;
+    static const std::vector<SettingEntry> defaultEntries = settingEntries(defaults);
+    const int labelW = 34 * cw, valueW = 16 * cw;
+    y = top;
+    for (int l = g.scroll; l < std::min<int>(static_cast<int>(lines.size()), g.scroll + visible); ++l) {
+        if (lines[l].header) {
+            text(x1, y + (rowH - lineH) / 2, fromUtf8(lines[l].header), accent);
+            y += rowH;
+            continue;
+        }
+        const int item = lines[l].item;
+        const int idx = items[item].index;
+        const SettingEntry& e = g.entries[idx];
+        row(item, {x1, y, w - margin, y + rowH});
+        const int ty = y + (rowH - lineH) / 2;
+        text(x1 + pad, ty, fromUtf8(e.label), white);
+        const bool isChanged = settingValue(e) != settingValue(defaultEntries[idx]);
+        std::wstring value = fromUtf8(formatSettingValue(e));
+        if (item == g.selected && g.editing) value = g.editText + L"_";
+        text(x1 + pad + labelW, ty, value, isChanged || (item == g.selected && g.editing) ? changed : white);
+        if (*e.hint) text(x1 + pad + labelW + valueW, ty, fromUtf8(e.hint), dim);
+        y += rowH;
+    }
+    if (g.scroll > 0) text(w - margin - 3 * cw, top - lineH, L"...", dim);
+    if (g.scroll + visible < static_cast<int>(lines.size())) text(w - margin - 3 * cw, y, L"...", dim);
+
+    // Footer.
+    int fy = h - margin - lineH * 3;
+    if (!g.notice.empty()) text(margin, fy - lineH, g.notice, accent);
+    text(margin, fy, L"Up/Down select   Enter open / toggle / type a value   Esc " +
+                         std::wstring(g.session ? L"back to the video" : L"quit"), dim);
+    fy += lineH;
+    text(margin, fy, L"Left/Right change a value   Shift x10 step   Ctrl double / halve   wheel scroll", dim);
+    fy += lineH;
+    text(margin, fy, L"Any number can be typed (1e6, 0.001, max, min); values only stop at what the setting allows. "
+                     L"Changed values are orange.", dim);
+    DeleteObject(selBrush);
+    DeleteObject(editBrush);
+    SelectObject(dc, oldFont);
+}
+
+// ---- Viewer ------------------------------------------------------------------
+
 void paint(HWND hwnd) {
     PAINTSTRUCT ps;
     HDC dc = BeginPaint(hwnd, &ps);
@@ -251,9 +605,16 @@ void paint(HWND hwnd) {
     GetClientRect(hwnd, &rc);
     const int w = std::max<int>(1, rc.right - rc.left), h = std::max<int>(1, rc.bottom - rc.top);
     ensureBackBuffer(w, h);
+    if (g.menu) {
+        drawMenu(g.memDC, w, h);
+        BitBlt(dc, 0, 0, w, h, g.memDC, 0, 0, SRCCOPY);
+        EndPaint(hwnd, &ps);
+        g.dirty = false;
+        return;
+    }
 
     Framebuffer fb{g.pixels, w, h, w};
-    g.renderer.render(*g.scene, g.view, g.renderOptions, fb);
+    g.renderer.render(*g.scene, g.view, g.cfg.render, fb);
     const RgbImage& thumb = g.scene->thumbnail;
     if (thumb.width > 0 && thumb.width + 24 < w) blitImage(thumb, w - thumb.width - 12, 12, fb);
     GdiFlush();
@@ -265,6 +626,10 @@ void paint(HWND hwnd) {
 }
 
 void onTimer() {
+    if (g.menu) {
+        if (g.dirty) InvalidateRect(g.hwnd, nullptr, FALSE);
+        return;
+    }
     if (g.session) {
         std::shared_ptr<const LiveSnapshot> latest = g.session->latest();
         if (latest->version != g.scene->version) {
@@ -282,7 +647,7 @@ void onTimer() {
 
 void onKey(WPARAM key) {
     switch (key) {
-        case VK_ESCAPE: DestroyWindow(g.hwnd); return;
+        case VK_ESCAPE: showMenu(); return;
         case VK_SPACE:
             if (g.session) g.session->setPaused(!g.session->paused());
             break;
@@ -292,12 +657,12 @@ void onKey(WPARAM key) {
         case 'C': g.view.attached = !g.view.attached; break;
         case 'F': g.view.follow = !g.view.follow; break;
         case 'R': g.view.reset(); break;
-        case 'T': g.renderOptions.highlightTracked = !g.renderOptions.highlightTracked; break;
-        case 'K': g.renderOptions.showKeyframes = !g.renderOptions.showKeyframes; break;
+        case 'T': g.cfg.render.highlightTracked = !g.cfg.render.highlightTracked; break;
+        case 'K': g.cfg.render.showKeyframes = !g.cfg.render.showKeyframes; break;
         case VK_ADD:
-        case VK_OEM_PLUS: g.renderOptions.pointSize = std::min(g.renderOptions.pointSize + 1, 8); break;
+        case VK_OEM_PLUS: g.cfg.render.pointSize = std::min(g.cfg.render.pointSize + 1, 100); break;
         case VK_SUBTRACT:
-        case VK_OEM_MINUS: g.renderOptions.pointSize = std::max(g.renderOptions.pointSize - 1, 1); break;
+        case VK_OEM_MINUS: g.cfg.render.pointSize = std::max(g.cfg.render.pointSize - 1, 1); break;
         case 'O': openVideoDialog(); break;
         case 'S': savePlyDialog(); break;
         default: return;
@@ -311,10 +676,25 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_ERASEBKGND: return 1;
         case WM_SIZE: g.dirty = true; return 0;
         case WM_TIMER: onTimer(); return 0;
-        case WM_KEYDOWN: onKey(wp); return 0;
+        case WM_KEYDOWN:
+            if (g.menu) {
+                onMenuKey(wp);
+            } else {
+                onKey(wp);
+            }
+            return 0;
+        case WM_CHAR:
+            if (g.menu) onMenuChar(static_cast<wchar_t>(wp));
+            return 0;
         case WM_LBUTTONDOWN:
+            if (g.menu) {
+                onMenuClick({GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
+                return 0;
+            }
+            [[fallthrough]];
         case WM_RBUTTONDOWN:
         case WM_MBUTTONDOWN:
+            if (g.menu) return 0;
             g.drag = msg == WM_LBUTTONDOWN ? App::Drag::Orbit : App::Drag::Pan;
             g.last = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
             SetCapture(hwnd);
@@ -340,6 +720,12 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_MOUSEWHEEL:
+            if (g.menu) {
+                g.scroll -= 3 * GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA;
+                g.scroll = std::max(g.scroll, 0);
+                g.dirty = true;
+                return 0;
+            }
             g.view.attached = false;
             g.view.zoomBy(GET_WHEEL_DELTA_WPARAM(wp) / double(WHEEL_DELTA));
             g.dirty = true;
@@ -353,6 +739,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_DESTROY:
             KillTimer(hwnd, kTimer);
+            saveConfig();
             PostQuitMessage(0);
             return 0;
     }
@@ -368,7 +755,8 @@ void showUsage() {
                 L"  --fuse <n>      covisible keyframes to fuse points with, 0 = no fusion (default 10)\n"
                 L"  --no-merge      fusion only links points to free keypoints, never merges duplicates\n"
                 L"  --real-time     play at the video's frame rate instead of as fast as possible\n\n"
-                L"Without a video, a file dialog opens.",
+                L"Without a video, the start menu opens; it has every setting, and remembers them in\n"
+                L"%APPDATA%\\videogammetry\\viewer.ini. Options given here override the saved ones.",
                 L"Videogammetry viewer", MB_OK | MB_ICONINFORMATION);
 }
 
@@ -379,21 +767,28 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCmd) {
     disablePowerThrottling();
     timeBeginPeriod(1);  // fine-grained sleeps for real-time pacing
 
+    wchar_t appData[MAX_PATH];
+    const DWORD appDataLen = GetEnvironmentVariableW(L"APPDATA", appData, MAX_PATH);
+    if (appDataLen > 0 && appDataLen < MAX_PATH) {
+        g.settingsFile = std::filesystem::path(appData) / L"videogammetry" / L"viewer.ini";
+        loadSettings(g.settingsFile, g.cfg, g.recent);
+    }
+
     std::wstring video;
     for (int i = 1; i < __argc; ++i) {
         const std::wstring a = __wargv[i];
         if (a == L"--fov" && i + 1 < __argc) {
-            g.settings.options.fovDeg = _wtof(__wargv[++i]);
+            g.cfg.session.options.fovDeg = _wtof(__wargv[++i]);
         } else if (a == L"--size" && i + 1 < __argc) {
-            g.settings.options.processSize = _wtoi(__wargv[++i]);
+            g.cfg.session.options.processSize = _wtoi(__wargv[++i]);
         } else if (a == L"--fuse" && i + 1 < __argc) {
-            g.settings.options.mapping.fuseNeighbours = _wtoi(__wargv[++i]);
+            g.cfg.session.options.mapping.fuseNeighbours = _wtoi(__wargv[++i]);
         } else if (a == L"--no-merge") {
-            g.settings.options.mapping.fuseMerge = false;
+            g.cfg.session.options.mapping.fuseMerge = false;
         } else if (a == L"--center-boost" && i + 1 < __argc) {
-            g.settings.options.orb.centerBoost = static_cast<float>(_wtof(__wargv[++i]));
+            g.cfg.session.options.orb.centerBoost = static_cast<float>(_wtof(__wargv[++i]));
         } else if (a == L"--real-time") {
-            g.settings.realTime = true;
+            g.cfg.session.realTime = true;
         } else if (a == L"-h" || a == L"--help" || a == L"--version") {
             showUsage();
             return 0;
@@ -421,11 +816,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCmd) {
     UpdateWindow(g.hwnd);
     SetTimer(g.hwnd, kTimer, 15, nullptr);
 
-    if (!video.empty()) {
-        startSession(video);
-    } else {
-        openVideoDialog();
-    }
+    if (!video.empty()) startSession(video);
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
