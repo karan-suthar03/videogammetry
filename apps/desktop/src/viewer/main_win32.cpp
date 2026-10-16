@@ -10,6 +10,7 @@
 #include <commdlg.h>
 #include <timeapi.h>
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cwchar>
@@ -503,7 +504,7 @@ void drawMenu(HDC dc, int w, int h) {
     top += lineH + margin / 2;
 
     // Left column: actions and recent videos.
-    const int colW = 44 * cw;
+    const int colW = 52 * cw;
     const std::wstring current = std::filesystem::path(g.videoPath).filename().wstring();
     int y = top;
     bool recentHeader = false;
@@ -530,6 +531,83 @@ void drawMenu(HDC dc, int w, int h) {
         row(i, {margin, y, margin + colW, y + rowH});
         text(margin + pad, y + (rowH - lineH) / 2, label, white);
         y += rowH;
+    }
+
+    // Under the actions: the full explanation of the selected line.
+    {
+        static ViewerSettings explainDefaults;
+        static const std::vector<SettingEntry> explainEntries = settingEntries(explainDefaults);
+        const MenuItem& sel = items[g.selected];
+        std::wstring title, body, facts;
+        switch (sel.kind) {
+            case MenuItem::Kind::Open:
+                title = L"Open video";
+                body = L"Pick a video file (mp4, mov, mkv, avi, webm, m4v) and reconstruct it with the settings on "
+                       L"the right. The point cloud, keyframes and camera path are drawn as they are built; Esc "
+                       L"comes back here.";
+                break;
+            case MenuItem::Kind::Resume:
+                title = L"Resume";
+                body = L"Back to the video that was playing, where it was paused. Setting changes made since do not "
+                       L"apply to it, except the view settings (point size, highlighting, keyframes); use Restart "
+                       L"for the others.";
+                break;
+            case MenuItem::Kind::Restart:
+                title = L"Restart with these settings";
+                body = L"Reconstructs " + current + L" again from its first frame with the settings as they are now. "
+                       L"The current reconstruction is discarded.";
+                break;
+            case MenuItem::Kind::Recent:
+                title = L"Recent video";
+                body = fromUtf8(g.recent[sel.index]) + L"\n\nOpens it again with the current settings.";
+                break;
+            case MenuItem::Kind::Reset:
+                title = L"Reset all settings";
+                body = L"Puts every setting on the right back to its default value (the values the benchmark is "
+                       L"tuned with). Recent videos are kept.";
+                break;
+            case MenuItem::Kind::Quit:
+                title = L"Quit";
+                body = L"Closes the viewer. Settings and recent videos are already saved.";
+                break;
+            case MenuItem::Kind::Setting: {
+                const SettingEntry& e = g.entries[sel.index];
+                title = fromUtf8(e.label);
+                body = fromUtf8(settingDetails(e.key));
+                const std::string def = formatSettingValue(explainEntries[sel.index]);
+                std::string range;
+                if (!isBool(e)) {
+                    char buf[96];
+                    if (std::isinf(e.max)) {
+                        std::snprintf(buf, sizeof(buf), "   Allowed: %.6g and up", e.min);
+                    } else {
+                        std::snprintf(buf, sizeof(buf), "   Allowed: %.6g to %.6g", e.min, e.max);
+                    }
+                    range = buf;
+                }
+                facts = fromUtf8("Now: " + formatSettingValue(e) + "   Default: " + def + range) + L"\n" +
+                        (appliesLive(e, g.cfg) ? L"Takes effect immediately."
+                                               : L"Takes effect when a video is opened or restarted.");
+                break;
+            }
+        }
+        y += lineH;
+        RECT box{margin, y, margin + colW, h - margin - lineH * 5};
+        if (box.bottom - box.top > lineH * 3) {
+            HBRUSH panel = CreateSolidBrush(RGB(32, 35, 42));
+            FillRect(dc, &box, panel);
+            DeleteObject(panel);
+            RECT r{box.left + pad, box.top + lineH / 2, box.right - pad, box.bottom - lineH / 2};
+            text(r.left, r.top, title, accent);
+            r.top += lineH + lineH / 2;
+            if (!facts.empty()) {
+                SetTextColor(dc, changed);
+                RECT fr = r;
+                r.top += DrawTextW(dc, facts.c_str(), -1, &fr, DT_WORDBREAK | DT_NOPREFIX) + lineH / 2;
+            }
+            SetTextColor(dc, white);
+            DrawTextW(dc, body.c_str(), -1, &r, DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
+        }
     }
 
     // Right column: every setting, grouped, scrolling with the selection.

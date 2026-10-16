@@ -30,6 +30,12 @@ struct SettingEntry {
 
 std::vector<SettingEntry> settingEntries(ViewerSettings& s);
 
+// Full explanation of a setting (by key): what it does, what raising and
+// lowering it changes, what extreme values do. "" for an unknown key.
+const char* settingDetails(const char* key);
+// True for settings the view uses as they change (no restart needed).
+bool appliesLive(const SettingEntry& e, const ViewerSettings& s);
+
 bool isBool(const SettingEntry& e);
 double settingValue(const SettingEntry& e);
 // Clamps to the entry's bounds (and rounds integers); returns the value stored.
