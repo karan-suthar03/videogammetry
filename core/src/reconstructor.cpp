@@ -1140,6 +1140,37 @@ int Reconstructor::triangulateBetween(int olderIndex, int newerIndex) {
     };
     std::vector<Candidate> best(ib.size());
     const int maxLevelDiff = options_.match.maxLevelDiff;
+
+    // The older features go into a grid (normalized image coordinates), so
+    // each epipolar line only visits the cells its band crosses instead of
+    // every feature: the search no longer grows with the square of the
+    // feature count. The band is as wide as the widest allowed distance
+    // (coarsest level); each candidate still gets the exact test below.
+    double minX = 0, maxX = 0, minY = 0, maxY = 0, maxScale = 1;
+    for (std::size_t a = 0; a < ia.size(); ++a) {
+        if (a == 0 || xa[a].x < minX) minX = xa[a].x;
+        if (a == 0 || xa[a].x > maxX) maxX = xa[a].x;
+        if (a == 0 || xa[a].y < minY) minY = xa[a].y;
+        if (a == 0 || xa[a].y > maxY) maxY = xa[a].y;
+        maxScale = std::max<double>(maxScale, older.keypoints[ia[a]].scale);
+    }
+    const int grid = std::clamp(static_cast<int>(std::sqrt(ia.size() / 8.0)), 1, 256);  // ~8 features per cell
+    const double cellW = std::max(maxX - minX, 1e-9) / grid, cellH = std::max(maxY - minY, 1e-9) / grid;
+    // Clamped before the cast: a band edge can lie far outside the image.
+    const auto cellX = [&](double x) { return static_cast<int>(std::clamp((x - minX) / cellW, 0.0, grid - 1.0)); };
+    const auto cellY = [&](double y) { return static_cast<int>(std::clamp((y - minY) / cellH, 0.0, grid - 1.0)); };
+    std::vector<int> cellStart(static_cast<std::size_t>(grid) * grid + 1, 0), cellItems(ia.size());
+    for (std::size_t a = 0; a < ia.size(); ++a) ++cellStart[cellY(xa[a].y) * grid + cellX(xa[a].x) + 1];
+    for (std::size_t c = 1; c < cellStart.size(); ++c) cellStart[c] += cellStart[c - 1];
+    {
+        std::vector<int> fill(cellStart.begin(), cellStart.end() - 1);
+        for (std::size_t a = 0; a < ia.size(); ++a) {
+            cellItems[fill[cellY(xa[a].y) * grid + cellX(xa[a].x)]++] = static_cast<int>(a);
+        }
+    }
+    // Widest band half-width in normalized units, with a margin for rounding.
+    const double band = mp.epipolarDistancePx * maxScale / fx * (1.0 + 1e-6) + 1e-12;
+
     parallelFor(pool_.get(), 0, static_cast<int>(ib.size()), 32, [&](int j0, int j1) {
         for (int j = j0; j < j1; ++j) {
             const Keypoint& kb = newer.keypoints[ib[j]];
@@ -1150,18 +1181,45 @@ int Reconstructor::triangulateBetween(int olderIndex, int newerIndex) {
             const double toPx = fx / lineNorm;
             const Descriptor& db = newer.descriptors[ib[j]];
             int bestA = -1, bestDist = INT_MAX, second = INT_MAX;
-            for (std::size_t a = 0; a < ia.size(); ++a) {
+            // Ties go to the lowest index, so the result does not depend on
+            // the order the cells are visited in.
+            const auto consider = [&](int a) {
                 const Keypoint& ka = older.keypoints[ia[a]];
-                if (std::abs(ka.level - kb.level) > maxLevelDiff) continue;
+                if (std::abs(ka.level - kb.level) > maxLevelDiff) return;
                 const double lineDistPx = std::abs(line.x * xa[a].x + line.y * xa[a].y + line.z) * toPx;
-                if (lineDistPx > mp.epipolarDistancePx * ka.scale) continue;
+                if (lineDistPx > mp.epipolarDistancePx * ka.scale) return;
                 const int d = hammingDistance(db, older.descriptors[ia[a]]);
-                if (d < bestDist) {
+                if (d < bestDist || (d == bestDist && a < bestA)) {
                     second = bestDist;
                     bestDist = d;
-                    bestA = static_cast<int>(a);
+                    bestA = a;
                 } else if (d < second) {
                     second = d;
+                }
+            };
+            const auto visitCell = [&](int cx, int cy) {
+                const int c = cy * grid + cx;
+                for (int i = cellStart[c]; i < cellStart[c + 1]; ++i) consider(cellItems[i]);
+            };
+            // Walk along the line's dominant axis; in each column (row) of
+            // cells the band covers a range of rows (columns).
+            if (std::abs(line.y) >= std::abs(line.x)) {
+                const double half = band * lineNorm / std::abs(line.y);  // band's vertical half-height
+                for (int cx = 0; cx < grid; ++cx) {
+                    const double x0 = minX + cx * cellW, x1 = x0 + cellW;
+                    const double y0 = -(line.x * x0 + line.z) / line.y, y1 = -(line.x * x1 + line.z) / line.y;
+                    const double lo = std::min(y0, y1) - half, hi = std::max(y0, y1) + half;
+                    if (hi < minY || lo > maxY) continue;
+                    for (int cy = cellY(lo), cyEnd = cellY(hi); cy <= cyEnd; ++cy) visitCell(cx, cy);
+                }
+            } else {
+                const double half = band * lineNorm / std::abs(line.x);  // band's horizontal half-width
+                for (int cy = 0; cy < grid; ++cy) {
+                    const double y0 = minY + cy * cellH, y1 = y0 + cellH;
+                    const double x0 = -(line.y * y0 + line.z) / line.x, x1 = -(line.y * y1 + line.z) / line.x;
+                    const double lo = std::min(x0, x1) - half, hi = std::max(x0, x1) + half;
+                    if (hi < minX || lo > maxX) continue;
+                    for (int cx = cellX(lo), cxEnd = cellX(hi); cx <= cxEnd; ++cx) visitCell(cx, cy);
                 }
             }
             if (bestA < 0 || bestDist > mp.triangulationMaxHamming) continue;

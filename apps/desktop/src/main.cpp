@@ -13,6 +13,7 @@
 
 #include "frame_prefetcher.h"
 #include "image_io.h"
+#include "options_table.h"
 #include "power.h"
 #include "video_reader.h"
 #include "videogammetry/map_quality.h"
@@ -28,6 +29,8 @@ void printUsage() {
         "\n"
         "Options:\n"
         "  -o <file.ply>               output point cloud (default: cloud.ply)\n"
+        "  --config <file.ini>         reconstruction options from a settings file, e.g. the viewer's\n"
+        "                              %%APPDATA%%/videogammetry/viewer.ini (options after it override it)\n"
         "  --trajectory <file.ply>     also write the keyframe camera positions\n"
         "  --size <px>                 long side of the frame is downscaled to this, 0 = full resolution (default 0)\n"
         "  --threads <n>               worker threads for tracking/mapping, 0 = all hardware threads (default 0)\n"
@@ -96,6 +99,11 @@ int main(int argc, char** argv) {
         }
         if (std::strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output = argv[++i];
+        } else if (std::strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
+            if (!loadOptionsFile(argv[++i], options)) {
+                std::fprintf(stderr, "error: cannot read %s\n", argv[i]);
+                return 1;
+            }
         } else if (std::strcmp(argv[i], "--trajectory") == 0 && i + 1 < argc) {
             trajectoryPath = argv[++i];
         } else if (std::strcmp(argv[i], "--size") == 0 && i + 1 < argc) {

@@ -1,11 +1,13 @@
 # Desktop apps: the CLI (Windows, Linux and macOS, same source) and the live viewer.
 
-# Video decoding + image file helpers, shared by the CLI and the dev tools.
+# Video decoding, image file helpers and the options table, shared by the CLI,
+# the viewer and the dev tools.
 add_library(videogammetry_video STATIC
     src/video_reader.cpp
     src/image_io.cpp
     src/frame_prefetcher.cpp
     src/power.cpp
+    src/options_table.cpp
 )
 target_include_directories(videogammetry_video PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(videogammetry_video PUBLIC videogammetry::core FFmpeg::FFmpeg)
