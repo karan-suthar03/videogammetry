@@ -36,6 +36,10 @@ struct OrbParams {
     // center gets (1 + centerBoost) times the features of a cell at the edge,
     // falling off smoothly (Gaussian). 0 = spread evenly.
     float centerBoost = 0.0f;
+    // Refine keypoint positions to a fraction of a pixel: the peak of a
+    // parabola through the Harris response at the corner and its four
+    // neighbours (otherwise positions are whole level pixels).
+    bool subpixel = true;
 };
 
 // Building blocks shared with other implementations of the same extractor
@@ -63,6 +67,14 @@ OrbGrid orbGrid(int width, int height, int budget);
 // local maxima in detection order (cell row, then cell, then y, then x).
 void distributeOrbCorners(const OrbGrid& grid, const std::vector<OrbCorner>& corners, int budget,
                           float centerBoost, std::vector<OrbCorner>& out);
+
+// Harris response at (x, y) of a level image (7x7 window), as used for
+// corner scores.
+float orbHarrisResponse(const Image& img, int x, int y);
+
+// Sub-pixel offset of a corner (in level pixels, each within [-0.5, 0.5])
+// from its Harris response and its left/right/up/down neighbours'.
+void orbSubpixelOffset(float center, float left, float right, float up, float down, float& dx, float& dy);
 
 // Oriented FAST + rotated BRIEF (Rublee et al., ICCV 2011), with features
 // spread over the image using a per-level grid.

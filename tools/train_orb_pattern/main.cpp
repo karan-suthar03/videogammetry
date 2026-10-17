@@ -91,7 +91,9 @@ int main(int argc, char** argv) {
     bits.columns.resize(candidates.size());
 
     // Same preprocessing as the pipeline: gray, downscale to 960 px wide.
-    vg::OrbExtractor orb;
+    vg::OrbParams orbParams;
+    orbParams.subpixel = false;  // patches are sampled at the corner's whole level pixel
+    vg::OrbExtractor orb(orbParams);
     vg::Image gray, small;
     std::vector<vg::Keypoint> keypoints;
     std::vector<vg::Descriptor> descriptors;

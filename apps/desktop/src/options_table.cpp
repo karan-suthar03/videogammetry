@@ -29,6 +29,7 @@ std::vector<SettingEntry> optionEntries(vg::Reconstructor::Options& o) {
         {"Features", "fastThreshold", "FAST threshold", "0..255", &orb.fastThreshold, 0, 255, 1},
         {"Features", "minFastThreshold", "FAST threshold (retry)", "0..255", &orb.minFastThreshold, 0, 255, 1},
         {"Features", "centerBoost", "Center boost", "0 = spread evenly", &orb.centerBoost, 0, kInf, 0.25},
+        {"Features", "subpixel", "Sub-pixel keypoints", "", &orb.subpixel, 0, 1, 1},
 
         {"Initialization", "minInitParallaxDeg", "Min parallax", "deg", &m.minInitParallaxDeg, 0, 180, 0.25},
         {"Initialization", "minInitialPoints", "Min initial points", "", &m.minInitialPoints, 0, kInf, 10},
@@ -163,6 +164,11 @@ const char* settingDetails(const char* key) {
          "features of a cell at the edge, falling off smoothly. 0 spreads them evenly. Helps when the edges are "
          "blurry or distorted; very large values put almost everything in the center."},
 
+        {"subpixel",
+         "Refines every keypoint to a fraction of a pixel: the peak of a parabola fitted through the corner "
+         "strength at the keypoint and its four neighbours. Off, keypoints sit on whole pixels of their pyramid "
+         "level, which at coarse levels means steps of several image pixels. Sharper positions make triangulated "
+         "depths less noisy and tracking steadier, for about four extra corner-strength evaluations per keypoint."},
         {"minInitParallaxDeg",
          "Before there is a map, the first two frames used must see the scene from different enough positions: "
          "this is the minimum median angle between the two viewing rays of a point. Lower starts the map sooner "

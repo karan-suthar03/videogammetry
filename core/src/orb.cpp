@@ -209,6 +209,21 @@ void OrbExtractor::buildPyramid(const Image& gray) {
     }
 }
 
+float orbHarrisResponse(const Image& img, int x, int y) { return harrisResponse(img, x, y); }
+
+void orbSubpixelOffset(float center, float left, float right, float up, float down, float& dx, float& dy) {
+    // Vertex of the parabola through (-1, a), (0, center), (1, b). The corner
+    // is a 3x3 maximum, so the curvature is <= 0 and the vertex within half a
+    // pixel; flat (zero curvature) means no information.
+    const auto vertex = [center](float a, float b) {
+        const float curvature = a + b - 2 * center;
+        if (!(curvature < 0)) return 0.0f;
+        return std::clamp(0.5f * (a - b) / curvature, -0.5f, 0.5f);
+    };
+    dx = vertex(left, right);
+    dy = vertex(up, down);
+}
+
 OrbGrid orbGrid(int width, int height, int budget) {
     OrbGrid g;
     g.x0 = kBorder;
@@ -373,8 +388,14 @@ void OrbExtractor::extract(const Image& gray, std::vector<Keypoint>& keypoints,
             const float scale = scales_[level];
             Keypoint& kp = keypoints[i];
             kp.angle = intensityCentroidAngle(pyramid_[level], c.x, c.y);
-            kp.x = (c.x + 0.5f) * scale - 0.5f;  // pixel centers map between levels
-            kp.y = (c.y + 0.5f) * scale - 0.5f;
+            float dx = 0, dy = 0;
+            if (params_.subpixel) {
+                const Image& img = pyramid_[level];
+                orbSubpixelOffset(c.score, harrisResponse(img, c.x - 1, c.y), harrisResponse(img, c.x + 1, c.y),
+                                  harrisResponse(img, c.x, c.y - 1), harrisResponse(img, c.x, c.y + 1), dx, dy);
+            }
+            kp.x = (c.x + dx + 0.5f) * scale - 0.5f;  // pixel centers map between levels
+            kp.y = (c.y + dy + 0.5f) * scale - 0.5f;
             kp.response = c.score;
             kp.level = level;
             kp.scale = scale;

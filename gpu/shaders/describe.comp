@@ -1,8 +1,9 @@
 #version 450
 // For every candidate that is a 3x3 local maximum of its level's score map
 // (same rule and tie-break as OrbExtractor::detectLevel): the intensity
-// centroid moments (orientation) and the rotated BRIEF descriptor on the
-// blurred level. Results go to the host; it picks the keypoints.
+// centroid moments (orientation), the rotated BRIEF descriptor on the
+// blurred level and the Harris responses of its four neighbours (sub-pixel
+// refinement). Results go to the host; it picks the keypoints.
 #extension GL_GOOGLE_include_directive : require
 layout(local_size_x = 64) in;
 #include "common.glsl"
@@ -73,4 +74,8 @@ void main() {
     res[r + 3u] = uint(m01);
     res[r + 4u] = uint(m10);
     for (int k = 0; k < 8; ++k) res[r + 6u + uint(k)] = desc[k];
+    res[r + 16u] = floatBitsToUint(harrisResponse(off, stride, x - 1, y));
+    res[r + 17u] = floatBitsToUint(harrisResponse(off, stride, x + 1, y));
+    res[r + 18u] = floatBitsToUint(harrisResponse(off, stride, x, y - 1));
+    res[r + 19u] = floatBitsToUint(harrisResponse(off, stride, x, y + 1));
 }

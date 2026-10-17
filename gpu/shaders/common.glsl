@@ -8,7 +8,7 @@ layout(std430, set = 0, binding = 1) buffer Temp { uint tmp[]; };           // b
 layout(std430, set = 0, binding = 2) buffer Scores { float scoreMap[]; };   // per level, 0 = no candidate
 layout(std430, set = 0, binding = 3) buffer Cells { uint cellHasMain[]; };  // per level grid cell
 layout(std430, set = 0, binding = 4) buffer Candidates { uint cand[]; };    // 3 words each: x | y << 16, level, score
-layout(std430, set = 0, binding = 5) buffer Results { uint res[]; };        // counters, then 16 words per local maximum
+layout(std430, set = 0, binding = 5) buffer Results { uint res[]; };        // counters, then kRecordWords words per local maximum
 layout(std430, set = 0, binding = 6) readonly buffer Params { int params[]; };
 layout(std430, set = 0, binding = 7) readonly buffer Frame { uint frame[]; };
 
@@ -16,7 +16,8 @@ layout(std430, set = 0, binding = 7) readonly buffer Frame { uint frame[]; };
 const uint kResCandidates = 0u;  // candidates found (may exceed capacity)
 const uint kResMaxima = 1u;      // local maxima found (may exceed capacity)
 const uint kResHeader = 16u;     // words before the first record
-const uint kRecordWords = 16u;   // x | y << 16, level, score, m01, m10, unused, descriptor[8], unused[2]
+const uint kRecordWords = 20u;   // x | y << 16, level, score, m01, m10, unused, descriptor[8], unused[2],
+                                 // Harris response left, right, up, down of the corner (sub-pixel)
 
 // Params header.
 const int kParamCandidateCapacity = 0;
@@ -37,3 +38,21 @@ int pixelAt(int offset, int strideWords, int x, int y) {
 }
 
 int frameByte(uint index) { return int((frame[index >> 2] >> ((index & 3u) * 8u)) & 0xFFu); }
+
+// vg::harrisResponse. The sums are exact integers in float; `precise` keeps
+// the final expression from being fused, so it rounds exactly like the CPU.
+float harrisResponse(int off, int stride, int x, int y) {
+    precise float a = 0.0, b = 0.0, c = 0.0;
+    for (int dy = -3; dy <= 3; ++dy) {
+        for (int dx = -3; dx <= 3; ++dx) {
+            precise float ix = float(pixelAt(off, stride, x + dx + 1, y + dy)) - float(pixelAt(off, stride, x + dx - 1, y + dy));
+            precise float iy = float(pixelAt(off, stride, x + dx, y + dy + 1)) - float(pixelAt(off, stride, x + dx, y + dy - 1));
+            a += ix * ix;
+            b += iy * iy;
+            c += ix * iy;
+        }
+    }
+    const float k = 0.04;
+    precise float r = a * b - c * c - k * (a + b) * (a + b);
+    return r;
+}

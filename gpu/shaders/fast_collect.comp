@@ -9,24 +9,6 @@ layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(push_constant) uniform P { int lv; } pc;
 
-// vg::harrisResponse. The sums are exact integers in float; `precise` keeps
-// the final expression from being fused, so it rounds exactly like the CPU.
-float harrisResponse(int off, int stride, int x, int y) {
-    precise float a = 0.0, b = 0.0, c = 0.0;
-    for (int dy = -3; dy <= 3; ++dy) {
-        for (int dx = -3; dx <= 3; ++dx) {
-            precise float ix = float(pixelAt(off, stride, x + dx + 1, y + dy)) - float(pixelAt(off, stride, x + dx - 1, y + dy));
-            precise float iy = float(pixelAt(off, stride, x + dx, y + dy + 1)) - float(pixelAt(off, stride, x + dx, y + dy - 1));
-            a += ix * ix;
-            b += iy * iy;
-            c += ix * iy;
-        }
-    }
-    const float k = 0.04;
-    precise float r = a * b - c * c - k * (a + b) * (a + b);
-    return r;
-}
-
 void main() {
     const int x = level(pc.lv, kLvX0) + int(gl_GlobalInvocationID.x);
     const int y = level(pc.lv, kLvY0) + int(gl_GlobalInvocationID.y);

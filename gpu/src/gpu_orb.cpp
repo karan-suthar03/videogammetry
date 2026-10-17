@@ -29,7 +29,7 @@ enum LevelField {
     kLvWidth, kLvHeight, kLvImage, kLvStride, kLvBlurred, kLvScore, kLvCells, kLvX0, kLvY0, kLvX1, kLvY1,
     kLvCell, kLvCols, kLvThreshold, kLvMinThreshold
 };
-constexpr std::uint32_t kResCandidates = 0, kResMaxima = 1, kResHeader = 16, kRecordWords = 16;
+constexpr std::uint32_t kResCandidates = 0, kResMaxima = 1, kResHeader = 16, kRecordWords = 20;
 constexpr int kMaxGpuLevels = 32;          // more (absurd scale factors) go to the CPU
 constexpr int kMaxGpuSide = 65535;         // keypoint coordinates are packed in 16 bits
 constexpr std::uint32_t kPushBytes = 64;
@@ -449,8 +449,14 @@ bool GpuFeatureExtractor::Impl::run(const FrameView& frame, FrameFeatures& out) 
             const std::uint32_t* r = res + kResHeader + static_cast<std::size_t>(it->index) * kRecordWords;
             Keypoint kp;
             kp.angle = std::atan2(float(static_cast<std::int32_t>(r[3])), float(static_cast<std::int32_t>(r[4])));
-            kp.x = (c.x + 0.5f) * scale - 0.5f;
-            kp.y = (c.y + 0.5f) * scale - 0.5f;
+            float dx = 0, dy = 0;
+            if (orb.subpixel) {
+                float nb[4];
+                std::memcpy(nb, r + 16, sizeof(nb));
+                orbSubpixelOffset(c.score, nb[0], nb[1], nb[2], nb[3], dx, dy);
+            }
+            kp.x = (c.x + dx + 0.5f) * scale - 0.5f;
+            kp.y = (c.y + dy + 0.5f) * scale - 0.5f;
             kp.response = c.score;
             kp.level = l;
             kp.scale = scale;
