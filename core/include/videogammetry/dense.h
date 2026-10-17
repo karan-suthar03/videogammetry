@@ -82,6 +82,10 @@ public:
     // calls closer than 200 ms apart unless `force`.
     void updateMap(const Reconstructor& reconstructor, bool force = false);
 
+    // All hardware threads from the next solve on (e.g. once tracking has
+    // ended and nothing else needs the CPU); still at low OS priority.
+    void setFullSpeed(bool full);
+
     struct Stats {
         long points = 0;
         int regions = 0;        // cells with enough map points

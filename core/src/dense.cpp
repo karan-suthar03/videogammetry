@@ -278,6 +278,7 @@ struct DenseMapper::Impl {
     mutable std::mutex mutex;
     std::condition_variable wake;
     bool stop = false;
+    bool fullSpeed = false;
     std::deque<Pending> pending;
     std::shared_ptr<const Snapshot> nextSnapshot;
     std::shared_ptr<const std::vector<Point>> cloud = std::make_shared<std::vector<Point>>();
@@ -408,6 +409,14 @@ void DenseMapper::updateMap(const Reconstructor& r, bool force) {
     impl_->wake.notify_all();
 }
 
+void DenseMapper::setFullSpeed(bool full) {
+    {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        impl_->fullSpeed = full;
+    }
+    impl_->wake.notify_all();
+}
+
 std::shared_ptr<const std::vector<Point>> DenseMapper::cloud() const {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     return impl_->cloud;
@@ -428,15 +437,21 @@ void DenseMapper::Impl::run() {
     while (true) {
         std::deque<Pending> newImages;
         std::shared_ptr<const Snapshot> newSnap;
+        bool full;
         {
             std::lock_guard<std::mutex> lock(mutex);
             if (stop) return;
+            full = fullSpeed;
             newImages.swap(pending);
             newSnap = std::move(nextSnapshot);
         }
         for (Pending& p : newImages) images[p.frame] = makeKeyImage(p.view, params.imageSize);
         while (static_cast<int>(images.size()) > std::max(params.maxImages, 3)) images.erase(images.begin());
         if (newSnap) takeSnapshot(std::move(newSnap));
+        // Only this thread uses the pool, so it can be swapped here.
+        const int threads = full ? ThreadPool::hardwareThreads()
+                                 : (params.threads > 0 ? params.threads : std::max(1, ThreadPool::hardwareThreads() / 2));
+        if ((pool ? pool->size() : 1) != threads) pool = threads > 1 ? std::make_unique<ThreadPool>(threads, true) : nullptr;
 
         bool newReference = false;
         const int n = snap ? chooseNode(newReference) : -1;

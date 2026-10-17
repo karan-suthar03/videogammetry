@@ -221,6 +221,7 @@ void LiveSession::run() {
         publish(nullptr, processingFps, false, "video done, refining the whole map (global bundle adjustment)...");
     }
     reconstructor_->finish();
+    if (dense_) dense_->setFullSpeed(true);  // tracking is over: the whole CPU
     if (dense_) dense_->updateMap(*reconstructor_, true);
     const vg::Reconstructor::Stats& st = reconstructor_->stats();
     char summary[256];
