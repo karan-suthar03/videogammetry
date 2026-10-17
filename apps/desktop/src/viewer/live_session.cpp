@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdio>
 
+#include "camera_reader.h"
 #include "frame_prefetcher.h"
 #include "video_reader.h"
 
@@ -33,15 +34,23 @@ double typicalDistance(const std::vector<vg::Point>& points, const vg::Vec3& fro
 
 }  // namespace
 
-LiveSession::LiveSession(std::string path, Settings settings)
-    : path_(std::move(path)), settings_(std::move(settings)), realTime_(settings_.realTime) {
+LiveSession::LiveSession(std::string path, Settings settings, std::wstring cameraId)
+    : path_(std::move(path)), settings_(std::move(settings)), cameraId_(std::move(cameraId)),
+      realTime_(settings_.realTime && cameraId_.empty()) {
     snapshot_ = std::make_shared<LiveSnapshot>();
     thread_ = std::thread([this] { run(); });
 }
 
 LiveSession::~LiveSession() {
     stop_ = true;
+    endCapture();
     if (thread_.joinable()) thread_.join();
+}
+
+void LiveSession::endCapture() {
+    endCapture_ = true;
+    std::lock_guard<std::mutex> lock(cameraMutex_);
+    if (camera_) camera_->close();
 }
 
 std::shared_ptr<const LiveSnapshot> LiveSession::latest() const {
@@ -57,20 +66,35 @@ bool LiveSession::savePly(const std::string& path, std::size_t& pointsWritten) c
 }
 
 void LiveSession::run() {
+    // Video: decoded ahead on its own thread (FramePrefetcher). Camera: the
+    // newest frame each time, so the map follows the camera without lag.
     VideoReader reader;
+    CameraReader cam;
+    std::unique_ptr<FramePrefetcher> frames;
     std::string error;
-    if (!reader.open(path_, error)) {
-        publish(nullptr, 0.0, true, "error: " + error);
-        done_ = true;
-        return;
+    if (camera()) {
+        if (!cam.open(cameraId_, settings_.options.processSize, error)) {
+            publish(nullptr, 0.0, true, "error: " + error);
+            done_ = true;
+            return;
+        }
+        std::lock_guard<std::mutex> lock(cameraMutex_);
+        camera_ = &cam;
+        if (endCapture_) cam.close();
+    } else {
+        if (!reader.open(path_, error)) {
+            publish(nullptr, 0.0, true, "error: " + error);
+            done_ = true;
+            return;
+        }
+        reader.setMaxSize(settings_.options.processSize);  // downscale while converting to RGB
+        frameCount_ = static_cast<long>(reader.info().frameCountEstimate);
+        frames = std::make_unique<FramePrefetcher>(reader);
     }
-    reader.setMaxSize(settings_.options.processSize);  // downscale while converting to RGB
-    frameCount_ = static_cast<long>(reader.info().frameCountEstimate);
     reconstructor_ = std::make_unique<vg::Reconstructor>(settings_.options);
 
-    // Decode thread -> parallel feature extraction -> this thread (tracking
-    // and mapping, in order), as in the CLI.
-    FramePrefetcher frames(reader);
+    // Frames -> parallel feature extraction -> this thread (tracking and
+    // mapping, in order), as in the CLI.
     vg::FrameExtractorFactory makeExtractor;
     int workers = 0;
     extractor_ = "CPU";
@@ -84,7 +108,10 @@ void LiveSession::run() {
                                  std::move(makeExtractor));
     std::thread feeder([&] {
         vg::FrameView f;
-        while (!stop_ && frames.next(f)) pipeline.push(f);
+        while (!stop_ && !endCapture_ && (frames ? frames->next(f) : cam.read(f))) {
+            while (paused_ && !stop_ && !endCapture_ && !frames) cam.read(f);  // keep only the newest
+            pipeline.push(f);
+        }
         pipeline.close();
     });
 
@@ -153,10 +180,17 @@ void LiveSession::run() {
         }
     }
     feeder.join();
+    {
+        std::lock_guard<std::mutex> lock(cameraMutex_);
+        camera_ = nullptr;
+    }
     if (stop_) return;
 
-    if (!frames.error().empty()) {
-        publish(nullptr, processingFps, false, "decode error: " + frames.error());
+    const std::string readError = frames ? frames->error() : (endCapture_ ? std::string() : cam.lastError());
+    if (!readError.empty()) {
+        publish(nullptr, processingFps, false, (frames ? "decode error: " : "camera error: ") + readError);
+    } else if (camera() || endCapture_) {
+        publish(nullptr, processingFps, false, "capture ended, refining the whole map (global bundle adjustment)...");
     } else {
         publish(nullptr, processingFps, false, "video done, refining the whole map (global bundle adjustment)...");
     }

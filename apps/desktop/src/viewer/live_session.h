@@ -13,6 +13,8 @@
 #include "videogammetry/point_cloud.h"
 #include "videogammetry/reconstructor.h"
 
+class CameraReader;
+
 // What the viewer draws: a copy of the reconstruction state at one frame.
 struct LiveSnapshot {
     long version = 0;  // increases with every publish
@@ -46,7 +48,7 @@ struct LiveSnapshot {
     std::string message;    // error or summary line
 };
 
-// Runs the reconstruction of one video on background threads (decode ->
+// Runs the reconstruction of one video (or a live camera) on background threads (decode ->
 // parallel feature extraction -> tracking and mapping) and publishes
 // snapshots for the viewer. Playback can be paced to the video's own frame
 // rate or run as fast as possible.
@@ -59,7 +61,9 @@ public:
         bool gpu = true;          // extract features on the GPU when there is one (Vulkan)
     };
 
-    LiveSession(std::string path, Settings settings);
+    // `cameraId` set: reads that camera (CameraReader) and `path` is just its
+    // name; the capture runs until endCapture().
+    LiveSession(std::string path, Settings settings, std::wstring cameraId = {});
     ~LiveSession();  // stops and joins
     LiveSession(const LiveSession&) = delete;
     LiveSession& operator=(const LiveSession&) = delete;
@@ -71,8 +75,13 @@ public:
 
     void setPaused(bool paused) { paused_ = paused; }
     bool paused() const { return paused_; }
-    void setRealTime(bool realTime) { realTime_ = realTime; }
+    void setRealTime(bool realTime) { realTime_ = realTime && cameraId_.empty(); }
     bool realTime() const { return realTime_; }
+    bool camera() const { return !cameraId_.empty(); }
+
+    // Stops reading frames here (ends a camera capture); the map is then
+    // refined and finished as at the end of a video.
+    void endCapture();
 
     // True once the video is done and the final map is ready.
     bool finished() const { return done_; }
@@ -85,9 +94,12 @@ private:
 
     std::string path_;
     Settings settings_;
+    std::wstring cameraId_;
+    std::mutex cameraMutex_;
+    CameraReader* camera_ = nullptr;  // while capturing
     std::unique_ptr<vg::Reconstructor> reconstructor_;
 
-    std::atomic<bool> stop_{false}, paused_{false}, realTime_{false}, done_{false};
+    std::atomic<bool> stop_{false}, endCapture_{false}, paused_{false}, realTime_{false}, done_{false};
     long frame_ = 0, frameCount_ = 0;
     double timestamp_ = 0.0;
 

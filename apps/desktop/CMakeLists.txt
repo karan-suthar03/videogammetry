@@ -29,10 +29,11 @@ if(WIN32)
         src/viewer/main_win32.cpp
         src/viewer/live_session.cpp
         src/viewer/renderer.cpp
+        src/viewer/camera_reader_win32.cpp
     )
     target_include_directories(videogammetry_viewer PRIVATE src/viewer)
     target_sources(videogammetry_viewer PRIVATE src/viewer/settings_table.cpp)
-    target_link_libraries(videogammetry_viewer PRIVATE videogammetry::core videogammetry_video comdlg32 winmm)
+    target_link_libraries(videogammetry_viewer PRIVATE videogammetry::core videogammetry_video comdlg32 winmm mfplat mf mfreadwrite mfuuid ole32)
     if(TARGET videogammetry_gpu)
         target_link_libraries(videogammetry_viewer PRIVATE videogammetry::gpu)
         target_compile_definitions(videogammetry_viewer PRIVATE VG_HAS_GPU)

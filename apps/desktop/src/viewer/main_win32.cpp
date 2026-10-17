@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include "camera_reader.h"
 #include "live_session.h"
 #include "power.h"
 #include "renderer.h"
@@ -35,8 +36,8 @@ constexpr std::size_t kMaxRecent = 6;
 
 // One selectable line of the start menu.
 struct MenuItem {
-    enum class Kind { Open, Resume, Restart, Recent, Reset, Quit, Setting } kind;
-    int index = 0;  // into App::recent or App::entries
+    enum class Kind { Open, Camera, Resume, Restart, Recent, Reset, Quit, Setting } kind;
+    int index = 0;  // into App::cameras, App::recent or App::entries
 };
 
 struct App {
@@ -46,7 +47,9 @@ struct App {
     std::vector<std::string> recent;  // UTF-8 paths, newest first
     std::filesystem::path settingsFile;
     std::unique_ptr<LiveSession> session;
-    std::wstring videoPath;
+    std::wstring videoPath;  // or the camera's name
+    std::wstring cameraId;   // set while the session reads a camera
+    std::vector<CameraReader::Device> cameras;
     std::shared_ptr<const LiveSnapshot> scene = std::make_shared<LiveSnapshot>();
 
     OrbitView view;
@@ -115,7 +118,22 @@ void startSession(const std::wstring& path) {
     if (g.recent.size() > kMaxRecent) g.recent.resize(kMaxRecent);
     saveConfig();
     g.videoPath = path;
+    g.cameraId.clear();
     g.session = std::make_unique<LiveSession>(toUtf8(path), g.cfg.session);
+    g.scene = std::make_shared<LiveSnapshot>();
+    g.view.reset();
+    g.notice.clear();
+    g.dirty = true;
+    updateTitle();
+}
+
+void startCamera(const CameraReader::Device& cam) {
+    g.session.reset();
+    g.menu = false;
+    g.editing = false;
+    g.videoPath = fromUtf8(cam.name);
+    g.cameraId = cam.id;
+    g.session = std::make_unique<LiveSession>(cam.name, g.cfg.session, cam.id);
     g.scene = std::make_shared<LiveSnapshot>();
     g.view.reset();
     g.notice.clear();
@@ -138,7 +156,8 @@ void openVideoDialog() {
 
 void savePlyDialog() {
     if (!g.session || !g.session->finished()) {
-        g.notice = L"The point cloud can be saved once the video is done.";
+        g.notice = g.session && g.session->camera() ? L"Press E to end the capture first; the point cloud can be saved then."
+                                                    : L"The point cloud can be saved once the video is done.";
         g.dirty = true;
         return;
     }
@@ -268,7 +287,7 @@ void drawHud(HDC dc) {
 
     const wchar_t* help[] = {
         L"left-drag orbit   right-drag pan   wheel zoom   C look through camera   F follow camera   R reset view",
-        L"Space pause   M real-time/max speed   T highlight tracked   N noise colors   K keyframes   +/- point size   O open   S save .ply   Esc menu",
+        L"Space pause   M real-time/max speed   T highlight tracked   N noise colors   K keyframes   +/- point size   O open   E end capture   S save .ply   Esc menu",
         L"red: current camera   blue: keyframes   orange: camera path   green: points tracked in this frame",
     };
     int hy = g.height - margin - lineH * 3;
@@ -287,6 +306,7 @@ void drawHud(HDC dc) {
 std::vector<MenuItem> menuItems() {
     using K = MenuItem::Kind;
     std::vector<MenuItem> items{{K::Open}};
+    for (int i = 0; i < static_cast<int>(g.cameras.size()); ++i) items.push_back({K::Camera, i});
     if (g.session) items.push_back({K::Resume});
     if (!g.videoPath.empty()) items.push_back({K::Restart});
     for (int i = 0; i < static_cast<int>(g.recent.size()); ++i) items.push_back({K::Recent, i});
@@ -307,6 +327,7 @@ void showMenu() {
     if (g.menu) return;
     g.menu = true;
     if (g.session) g.session->setPaused(true);  // Resume continues it
+    g.cameras = CameraReader::list();  // plugged in or out since
     g.selected = 0;
     g.dirty = true;
 }
@@ -359,7 +380,14 @@ void activate(const MenuItem& it) {
             g.menu = false;
             g.session->setPaused(false);
             break;
-        case K::Restart: startSession(g.videoPath); break;
+        case K::Camera: startCamera(g.cameras[it.index]); break;
+        case K::Restart:
+            if (g.cameraId.empty()) {
+                startSession(g.videoPath);
+            } else {
+                startCamera({toUtf8(g.videoPath), g.cameraId});
+            }
+            break;
         case K::Recent: {
             const std::wstring path = fromUtf8(g.recent[it.index]);
             if (std::filesystem::exists(path)) {
@@ -515,12 +543,22 @@ void drawMenu(HDC dc, int w, int h) {
         std::wstring label;
         switch (it.kind) {
             case MenuItem::Kind::Open: label = L"Open video...                 O"; break;
+            case MenuItem::Kind::Camera: {
+                const CameraReader::Device& c = g.cameras[it.index];
+                label = fromUtf8(c.name) + (g.session && c.id == g.cameraId ? L"  (in use)" : L"");
+                break;
+            }
             case MenuItem::Kind::Resume: label = L"Resume " + current + L"         Esc"; break;
             case MenuItem::Kind::Restart: label = L"Restart " + current + L" with these settings"; break;
             case MenuItem::Kind::Recent: label = std::filesystem::path(fromUtf8(g.recent[it.index])).filename().wstring(); break;
             case MenuItem::Kind::Reset: label = L"Reset all settings to defaults"; break;
             case MenuItem::Kind::Quit: label = g.session ? L"Quit" : L"Quit                          Esc"; break;
             case MenuItem::Kind::Setting: break;
+        }
+        if (it.kind == MenuItem::Kind::Camera && it.index == 0) {
+            y += lineH / 2;
+            text(margin, y, L"Cameras", accent);
+            y += lineH + 2;
         }
         if (it.kind == MenuItem::Kind::Recent && !recentHeader) {
             y += lineH / 2;
@@ -546,6 +584,13 @@ void drawMenu(HDC dc, int w, int h) {
                 body = L"Pick a video file (mp4, mov, mkv, avi, webm, m4v) and reconstruct it with the settings on "
                        L"the right. The point cloud, keyframes and camera path are drawn as they are built; Esc "
                        L"comes back here.";
+                break;
+            case MenuItem::Kind::Camera:
+                title = L"Camera";
+                body = L"Reconstructs live from " + fromUtf8(g.cameras[sel.index].name) +
+                       L" with the settings on the right, always on the newest frame. Picking another camera here "
+                       L"switches to it and starts a new map. E ends the capture: the whole map is refined and can "
+                       L"then be saved with S.";
                 break;
             case MenuItem::Kind::Resume:
                 title = L"Resume";
@@ -745,6 +790,9 @@ void onKey(WPARAM key) {
         case VK_OEM_MINUS: g.cfg.render.pointSize = std::max(g.cfg.render.pointSize - 1, 1); break;
         case 'O': openVideoDialog(); break;
         case 'S': savePlyDialog(); break;
+        case 'E':
+            if (g.session && !g.session->finished()) g.session->endCapture();
+            break;
         default: return;
     }
     g.dirty = true;
@@ -896,6 +944,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCmd) {
     UpdateWindow(g.hwnd);
     SetTimer(g.hwnd, kTimer, 15, nullptr);
 
+    g.cameras = CameraReader::list();
     if (!video.empty()) startSession(video);
 
     MSG msg;
