@@ -47,6 +47,8 @@ def parse_log(log):
         "points": grab(r"quality: (\d+) points", log, int),
         "surface_variation": grab(r"surface variation median ([\d.]+)", log),
         "scattered_pct": grab(r"(\d+)% scattered", log, int),
+        "noise_median_pct": grab(r"uncertainty \(1 px\) median ([\d.]+)%", log),
+        "noise_p90_pct": grab(r"90th percentile ([\d.]+)%", log),
         "two_view_pct": grab(r"(\d+)% seen by only 2", log, int),
         "fov": grab(r"field of view ([\d.]+) deg", log),
         "k1": grab(r"radial distortion k1 (-?[\d.]+)", log),
@@ -129,7 +131,7 @@ def summarize(runs):
     """Median over runs of every number; ranges for the path errors."""
     s = {}
     for key in ("frames", "lost_frames", "maps", "tracked_per_frame", "keyframes", "points", "surface_variation",
-                "scattered_pct", "two_view_pct", "fov", "k1", "background_passes", "fps", "core_fps", "video_fps",
+                "scattered_pct", "noise_median_pct", "noise_p90_pct", "two_view_pct", "fov", "k1", "background_passes", "fps", "core_fps", "video_fps",
                 "wall_s", "reference_fov", "reference_k1", "frame_ms_p50", "frame_ms_p99", "frame_ms_max",
                 "over_budget_pct", "worst_latency_ms", "dropped", "budget_ms"):
         s[key] = median([r.get(key) for r in runs])

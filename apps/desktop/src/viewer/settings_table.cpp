@@ -17,6 +17,7 @@ std::vector<SettingEntry> settingEntries(ViewerSettings& s) {
         {"Playback", "thumbnailSize", "Video thumbnail size", "px, up to the full frame", &s.session.thumbnailSize, 1, kInf, 20},
         {"Playback", "pointSize", "Point size", "px, 1..100", &s.render.pointSize, 1, 100, 1},
         {"Playback", "highlightTracked", "Highlight tracked points", "", &s.render.highlightTracked, 0, 1, 1},
+        {"Playback", "colorByNoise", "Color points by noise", "green = precise, red = noisy", &s.render.colorByNoise, 0, 1, 1},
         {"Playback", "showKeyframes", "Show keyframes", "", &s.render.showKeyframes, 0, 1, 1},
         {"Processing", "gpu", "Extract features on the GPU", "Vulkan; CPU if none", &s.session.gpu, 0, 1, 1},
     };

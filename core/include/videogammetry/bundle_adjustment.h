@@ -74,6 +74,11 @@ struct BAReport {
     double focalStd = 1e30;
     double k1 = 0.0;        // refined distortion (= BAParams::k1 if not refined)
     double k1Std = 1e30;    // its data-only standard deviation
+    // Per point: standard deviation of its position along its least certain
+    // direction, for 1 px image noise at the keypoints' level with the cameras
+    // held fixed, relative to its distance from the nearest camera observing
+    // it. Infinite if the observations do not determine the point.
+    std::vector<double> pointNoise;
 };
 
 // Refines the non-fixed poses and all points in place (and the focal length,

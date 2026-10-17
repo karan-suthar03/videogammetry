@@ -268,7 +268,7 @@ void drawHud(HDC dc) {
 
     const wchar_t* help[] = {
         L"left-drag orbit   right-drag pan   wheel zoom   C look through camera   F follow camera   R reset view",
-        L"Space pause   M real-time/max speed   T highlight tracked   K keyframes   +/- point size   O open   S save .ply   Esc menu",
+        L"Space pause   M real-time/max speed   T highlight tracked   N noise colors   K keyframes   +/- point size   O open   S save .ply   Esc menu",
         L"red: current camera   blue: keyframes   orange: camera path   green: points tracked in this frame",
     };
     int hy = g.height - margin - lineH * 3;
@@ -550,7 +550,7 @@ void drawMenu(HDC dc, int w, int h) {
             case MenuItem::Kind::Resume:
                 title = L"Resume";
                 body = L"Back to the video that was playing, where it was paused. Setting changes made since do not "
-                       L"apply to it, except the view settings (point size, highlighting, keyframes); use Restart "
+                       L"apply to it, except the view settings (point size, highlighting, noise colors, keyframes); use Restart "
                        L"for the others.";
                 break;
             case MenuItem::Kind::Restart:
@@ -737,6 +737,7 @@ void onKey(WPARAM key) {
         case 'F': g.view.follow = !g.view.follow; break;
         case 'R': g.view.reset(); break;
         case 'T': g.cfg.render.highlightTracked = !g.cfg.render.highlightTracked; break;
+        case 'N': g.cfg.render.colorByNoise = !g.cfg.render.colorByNoise; break;
         case 'K': g.cfg.render.showKeyframes = !g.cfg.render.showKeyframes; break;
         case VK_ADD:
         case VK_OEM_PLUS: g.cfg.render.pointSize = std::min(g.cfg.render.pointSize + 1, 100); break;

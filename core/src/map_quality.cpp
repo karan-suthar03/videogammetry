@@ -135,6 +135,16 @@ MapQuality evaluateMap(const std::vector<MapPoint>& points, const std::vector<Ke
     q.meanObservations = double(observations) / good.size();
     q.twoViewShare = double(twoView) / good.size();
     q.medianParallaxDeg = median(parallax);
+    std::vector<double> noise;
+    noise.reserve(good.size());
+    for (int id : good) {
+        if (points[id].noise >= 0) noise.push_back(100.0 * points[id].noise);
+    }
+    if (!noise.empty()) {
+        std::sort(noise.begin(), noise.end());
+        q.medianNoisePct = noise[noise.size() / 2];
+        q.p90NoisePct = noise[std::min(noise.size() - 1, noise.size() * 9 / 10)];
+    }
     q.lowParallaxShare = double(lowParallax) / good.size();
 
     // Surface variation of each point's neighbourhood.

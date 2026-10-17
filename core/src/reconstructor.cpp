@@ -4,6 +4,7 @@
 #include <chrono>
 #include <climits>
 #include <cmath>
+#include <limits>
 
 namespace vg {
 
@@ -778,6 +779,9 @@ BAReport Reconstructor::applyJob(BAJob& job) {
         if (p.bad) continue;  // removed or merged meanwhile
         p.position = job.problem.points[j];
         solved[job.pointIds[j]] = 1;
+        if (j < report.pointNoise.size()) {
+            p.noise = static_cast<float>(std::min<double>(report.pointNoise[j], std::numeric_limits<float>::max()));
+        }
     }
     for (std::size_t id = static_cast<std::size_t>(job.pointCount); id < points_.size(); ++id) {
         MapPoint& p = points_[id];
@@ -959,9 +963,41 @@ int Reconstructor::createPoint(MapPoint point, PointObservation a, PointObservat
     points_.push_back(std::move(point));
     addObservation(id, a);
     addObservation(id, b);
+    points_[id].noise = pointNoise(points_[id]);
     recentPoints_.push_back(id);
     ++stats_.pointsCreated;
     return id;
+}
+
+double Reconstructor::nearestObserverDistance(const MapPoint& p) const {
+    double nearest = std::numeric_limits<double>::infinity();
+    for (const PointObservation& o : p.observations) {
+        nearest = std::min(nearest, norm(p.position - keyframes_[o.keyframe].pose.center()));
+    }
+    return nearest;
+}
+
+float Reconstructor::pointNoise(const MapPoint& p) const {
+    // Information about the position from each ray: (I - r r^T) / (sigma d)^2,
+    // sigma = the keypoint's scale in normalized units, d = distance along r.
+    double info[9] = {};
+    for (const PointObservation& o : p.observations) {
+        const Vec3 ray = p.position - keyframes_[o.keyframe].pose.center();
+        const double d = norm(ray);
+        if (d <= 0) continue;
+        const Vec3 r = ray * (1.0 / d);
+        const double sigma = keyframes_[o.keyframe].keypoints[o.keypoint].scale / intrinsics_.fx;
+        const double w = 1.0 / (sigma * sigma * d * d);
+        const double rv[3] = {r.x, r.y, r.z};
+        for (int a = 0; a < 3; ++a)
+            for (int b = 0; b < 3; ++b) info[a * 3 + b] += w * ((a == b ? 1.0 : 0.0) - rv[a] * rv[b]);
+    }
+    double values[3], vectors[9];
+    symmetricEigen(info, 3, values, vectors);
+    const double smallest = std::min({values[0], values[1], values[2]});
+    const double nearest = nearestObserverDistance(p);
+    if (!(smallest > 0) || !(nearest > 0) || !std::isfinite(nearest)) return std::numeric_limits<float>::max();
+    return static_cast<float>(1.0 / std::sqrt(smallest) / nearest);
 }
 
 void Reconstructor::addObservation(int pointId, PointObservation obs) {
@@ -1473,8 +1509,10 @@ PointCloud Reconstructor::pointCloud() const {
     const std::vector<MapPoint>& src = points_.size() >= bestPoints_.size() ? points_ : bestPoints_;
     PointCloud cloud;
     cloud.points.reserve(src.size());
+    const float maxNoise = static_cast<float>(options_.maxPointNoisePct / 100.0);
     for (const MapPoint& p : src) {
         if (p.bad) continue;
+        if (maxNoise > 0 && p.noise > maxNoise) continue;
         Point q;
         q.x = static_cast<float>(p.position.x);
         q.y = static_cast<float>(p.position.y);

@@ -194,9 +194,13 @@ void LiveSession::publish(const vg::FrameView* frame, double processingFps, bool
     }
     s->points.reserve(mapPoints.size());
     s->tracked.reserve(mapPoints.size());
+    s->noise.reserve(mapPoints.size());
+    // Hidden like in the saved cloud (Reconstructor::pointCloud).
+    const float maxNoise = static_cast<float>(settings_.options.maxPointNoisePct / 100.0);
     for (std::size_t i = 0; i < mapPoints.size(); ++i) {
         const vg::MapPoint& p = mapPoints[i];
         if (p.bad) continue;
+        if (maxNoise > 0 && p.noise > maxNoise) continue;
         vg::Point q;
         q.x = static_cast<float>(p.position.x);
         q.y = static_cast<float>(p.position.y);
@@ -206,6 +210,7 @@ void LiveSession::publish(const vg::FrameView* frame, double processingFps, bool
         q.b = p.color[2];
         s->points.push_back(q);
         s->tracked.push_back(seen[i]);
+        s->noise.push_back(p.noise);
     }
     for (const vg::Keyframe& k : r.keyframes()) s->keyframes.push_back(k.pose);
     s->currentValid = r.state() == vg::Reconstructor::State::Tracking && !r.keyframes().empty();

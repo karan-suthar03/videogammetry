@@ -44,6 +44,7 @@ struct OrbitView {
 struct RenderOptions {
     int pointSize = 2;            // pixels
     bool highlightTracked = true; // points seen in the current frame drawn green
+    bool colorByNoise = true;     // points colored by depth uncertainty instead of their own color
     bool showKeyframes = true;
 };
 

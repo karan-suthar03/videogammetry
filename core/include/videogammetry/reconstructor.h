@@ -48,6 +48,10 @@ public:
         TwoViewParams twoView;
         PnPParams pnp;
         MappingParams mapping;
+        // pointCloud() leaves out points noisier than this (MapPoint::noise,
+        // in percent of their distance; 0 = keep all). The default drops about
+        // the noisiest tenth.
+        double maxPointNoisePct = 5;
     };
 
     enum class State { Initializing, Tracking, Lost };
@@ -155,6 +159,9 @@ private:
     int triangulateBetween(int older, int newer);  // keyframe indices
     // Map bookkeeping: keyframe pointIds and point observations stay in sync.
     int createPoint(MapPoint point, PointObservation a, PointObservation b);
+    // MapPoint::noise from the point's observation rays (cameras fixed).
+    float pointNoise(const MapPoint& p) const;
+    double nearestObserverDistance(const MapPoint& p) const;
     void addObservation(int pointId, PointObservation obs);
     void removeObservation(int pointId, PointObservation obs);  // the point goes bad below 2 views
     void setBad(int pointId);

@@ -26,6 +26,11 @@ struct MapQuality {
     // mostly walls and ground, so noise raises it.
     double medianSurfaceVariation = 0;
     double scatteredShare = 0;     // surface variation above 0.1
+
+    // MapPoint::noise (depth uncertainty for 1 px keypoint noise, percent of
+    // the distance) over the points where it is known.
+    double medianNoisePct = 0;
+    double p90NoisePct = 0;
 };
 
 // Points marked bad are ignored. kNeighbours >= 3.

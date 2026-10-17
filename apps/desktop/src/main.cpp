@@ -349,6 +349,8 @@ int main(int argc, char** argv) {
                     "%.0f%% below 2 deg; surface variation median %.3f, %.0f%% scattered\n",
                     q.points, q.meanObservations, 100 * q.twoViewShare, q.medianParallaxDeg,
                     100 * q.lowParallaxShare, q.medianSurfaceVariation, 100 * q.scatteredShare);
+        std::printf("noise:   depth uncertainty (1 px) median %.2f%%, 90th percentile %.2f%% of the distance\n",
+                    q.medianNoisePct, q.p90NoisePct);
     } else {
         std::printf("map:     not initialized (not enough parallax/matches between frames)\n");
     }

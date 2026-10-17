@@ -19,6 +19,7 @@ struct LiveSnapshot {
 
     std::vector<vg::Point> points;       // current map (rejected points left out)
     std::vector<std::uint8_t> tracked;   // per point: seen in the current frame
+    std::vector<float> noise;            // per point: MapPoint::noise (< 0 = unknown)
     std::vector<vg::Pose> keyframes;     // world -> camera
     vg::Pose current;                    // pose of the current frame
     bool currentValid = false;           // false while initializing or lost

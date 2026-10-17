@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 
 namespace vg {
 
@@ -193,7 +194,12 @@ public:
         report.finalRmsPx = rmsPx(P_.poses, P_.points);
         report.focalScale = s_;
         report.k1 = k_;
-        if (G_ > 0) intrinsicsUncertainty(report);
+        if (G_ > 0) {
+            intrinsicsUncertainty(report);  // linearizes at the solution
+        } else {
+            linearize();
+        }
+        pointUncertainty(report);
         report.ok = true;
         return report;
     }
@@ -233,6 +239,32 @@ private:
         }
         if (focalSlot_ >= 0) report.focalStd = std::sqrt(var[focalSlot_]);
         if (k1Slot_ >= 0) report.k1Std = std::sqrt(var[k1Slot_]);
+    }
+
+    // Point covariance with the cameras fixed: the inverse of its information
+    // block V (normalized units); its largest eigenvalue is the inverse of V's
+    // smallest.
+    void pointUncertainty(BAReport& report) {
+        const double focal = focal_ * s_;
+        std::vector<Vec3> centers(P_.poses.size());
+        for (std::size_t c = 0; c < centers.size(); ++c) centers[c] = P_.poses[c].center();
+        report.pointNoise.assign(P_.points.size(), std::numeric_limits<double>::infinity());
+        parallelFor(pool_, 0, static_cast<int>(P_.points.size()), 256, [&](int p0, int p1) {
+            for (int p = p0; p < p1; ++p) {
+                double nearest = std::numeric_limits<double>::infinity();
+                for (int o : pointObs_[p]) {
+                    if (!active_[o]) continue;
+                    nearest = std::min(nearest, norm(P_.points[p] - centers[P_.observations[o].camera]));
+                }
+                Mat33 v = V_[p];
+                double values[3], vectors[9];
+                symmetricEigen(v.data(), 3, values, vectors);
+                const double smallest = std::min({values[0], values[1], values[2]});
+                if (smallest > 0 && nearest > 0 && nearest < std::numeric_limits<double>::infinity()) {
+                    report.pointNoise[p] = 1.0 / (focal * std::sqrt(smallest) * nearest);
+                }
+            }
+        });
     }
 
     // Levenberg-Marquardt over the active observations; returns accepted steps.

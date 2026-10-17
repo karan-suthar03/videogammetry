@@ -52,6 +52,15 @@ bool clipSegment(double& x0, double& y0, double& x1, double& y1, int w, int h) {
     return true;
 }
 
+// Depth uncertainty (fraction of the distance) as a color: green at 0.5% or
+// less, through yellow (1.6%) to red at 5% or more (log scale); gray when unknown.
+std::uint32_t noiseColor(float noise) {
+    if (noise < 0) return rgb(128, 128, 128);
+    const double t = std::clamp(std::log10(std::max(noise, 1e-6f) / 0.005), 0.0, 1.0);
+    const double red = std::min(1.0, 2 * t), green = std::min(1.0, 2 * (1 - t));
+    return rgb(static_cast<int>(40 + 215 * red), static_cast<int>(40 + 215 * green), 40);
+}
+
 void drawLine2D(double x0, double y0, double x1, double y1, std::uint32_t color, int thickness, Framebuffer& fb) {
     if (!clipSegment(x0, y0, x1, y1, fb.width, fb.height)) return;
     const int steps = std::max(1, static_cast<int>(std::ceil(std::max(std::abs(x1 - x0), std::abs(y1 - y0)))));
@@ -187,7 +196,9 @@ void SceneRenderer::render(const LiveSnapshot& scene, const OrbitView& view, con
         const int u0 = static_cast<int>(std::floor(focal * x / z + cx)) - (size - 1) / 2;
         const int v0 = static_cast<int>(std::floor(focal * y / z + cy)) - (size - 1) / 2;
         if (u0 + size <= 0 || v0 + size <= 0 || u0 >= fb.width || v0 >= fb.height) continue;
-        const std::uint32_t color = tracked ? kTracked : rgb(p.r, p.g, p.b);
+        const std::uint32_t color = tracked                ? kTracked
+                                    : options.colorByNoise ? noiseColor(scene.noise[i])
+                                                           : rgb(p.r, p.g, p.b);
         for (int v = std::max(v0, 0); v < std::min(v0 + size, fb.height); ++v) {
             for (int u = std::max(u0, 0); u < std::min(u0 + size, fb.width); ++u) {
                 float& d = depth_[static_cast<std::size_t>(v) * fb.width + u];

@@ -77,6 +77,8 @@ std::vector<SettingEntry> optionEntries(vg::Reconstructor::Options& o) {
         {"Calibration", "refineDistortion", "Refine lens distortion", "", &m.refineDistortion, 0, 1, 1},
         {"Calibration", "focalEveryKeyframes", "Focal refinement every", "keyframes", &m.focalEveryKeyframes, 1, kInf, 1},
         {"Calibration", "focalBAKeyframes", "Focal refinement keyframes", "", &m.focalBAKeyframes, 1, kInf, 1},
+
+        {"Output", "maxPointNoisePct", "Max point noise", "% of distance, 0 = keep all", &o.maxPointNoisePct, 0, kInf, 0.5},
     };
     // clang-format on
 }
@@ -101,6 +103,11 @@ const char* settingDetails(const char* key) {
         {"highlightTracked",
          "Draws the map points that were matched in the current frame in green instead of their own color, which "
          "shows what the camera is locked onto right now. T while playing."},
+        {"colorByNoise",
+         "Colors every map point by how precisely its position is known instead of its own color: green when its "
+         "depth is uncertain by 0.5% of its distance or less, yellow around 1.6%, red at 5% or more (for one pixel "
+         "of keypoint error), gray before it has been measured. Shows where the cloud is noisy: points seen only "
+         "from nearby positions, or only at coarse pyramid levels. N while playing."},
         {"showKeyframes",
          "Draws a small blue camera frustum at every keyframe (the frames the map is built from). Turning it off "
          "uncovers the points behind dense camera paths. K while playing."},
@@ -307,6 +314,13 @@ const char* settingDetails(const char* key) {
         {"focalBAKeyframes",
          "Keyframes optimized together in each focal refinement. More gives a better-determined focal length at "
          "more cost."},
+
+        {"maxPointNoisePct",
+         "Points whose depth is uncertain by more than this percentage of their distance (for one pixel of "
+         "keypoint error) are left out of the view and the saved cloud; they stay in the map for tracking. The "
+         "uncertainty comes from bundle adjustment: points seen only from nearby positions or at coarse pyramid "
+         "levels score high. 5 drops about the noisiest tenth; 2-3 keeps a cleaner, sparser cloud; 0 keeps every "
+         "point. Applies from the next start."},
     };
     // clang-format on
     for (const Details& d : kDetails) {

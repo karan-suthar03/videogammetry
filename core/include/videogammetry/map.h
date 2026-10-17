@@ -22,6 +22,12 @@ struct MapPoint {
     std::array<std::uint8_t, 3> color{255, 255, 255};
     std::vector<PointObservation> observations;  // one per keyframe that sees it
     int firstKeyframe = 0;  // keyframe whose insertion created it
+    // Noise: standard deviation of the position along its least certain
+    // direction (usually the depth), relative to the distance from the
+    // nearest keyframe that sees it, for 1 px keypoint noise at the
+    // keypoints' pyramid level. Set when created and after every bundle
+    // adjustment that includes the point; < 0 = unknown.
+    float noise = -1;
     bool bad = false;       // rejected; detached from all keyframes and ignored everywhere
 };
 
