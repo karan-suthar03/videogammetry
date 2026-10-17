@@ -30,3 +30,17 @@ if(TARGET videogammetry_gpu)
             COMMAND_EXPAND_LISTS)
     endif()
 endif()
+
+# Camera capture (the viewer's live input): devices, frame rate, one frame saved.
+if(WIN32)
+    add_executable(camera_check camera_check/main.cpp ${PROJECT_SOURCE_DIR}/apps/desktop/src/viewer/camera_reader_win32.cpp)
+    target_include_directories(camera_check PRIVATE ${PROJECT_SOURCE_DIR}/apps/desktop/src/viewer)
+    target_link_libraries(camera_check PRIVATE videogammetry::core videogammetry_video mfplat mf mfreadwrite mfuuid ole32)
+    target_compile_options(camera_check PRIVATE /W4 /permissive- /utf-8)
+    target_compile_definitions(camera_check PRIVATE UNICODE _UNICODE)
+    if(FFMPEG_DLLS)
+        add_custom_command(TARGET camera_check POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FFMPEG_DLLS} $<TARGET_FILE_DIR:camera_check>
+            COMMAND_EXPAND_LISTS)
+    endif()
+endif()
