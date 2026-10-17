@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "videogammetry/frame.h"
+#include "videogammetry/linalg.h"
 #include "videogammetry/point_cloud.h"
 
 namespace vg {
@@ -97,6 +98,23 @@ public:
     // update; later points are not covered): 1 = replaced or removed by the
     // dense solver. May be null.
     std::shared_ptr<const std::vector<std::uint8_t>> hiddenSparse() const;
+
+    // What the solver is doing, for display: the cell being solved, the
+    // cameras it matches (reference first), and the cells solved recently.
+    struct Activity {
+        struct Box {
+            Vec3 lo, hi;
+            int level = 0;
+            int points = 0;    // dense points the solve kept
+            double age = 0;    // seconds since it finished
+        };
+        bool solving = false;
+        Box current;
+        Vec3 reference;
+        std::vector<Vec3> views;
+        std::vector<Box> recent;  // newest first
+    };
+    std::shared_ptr<const Activity> activity() const;
 
 private:
     struct Impl;

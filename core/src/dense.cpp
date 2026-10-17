@@ -297,6 +297,21 @@ struct DenseMapper::Impl {
     int solves = 0;
     double lastSolveMs = 0;
 
+    // Display: the solve in progress and the recently finished ones.
+    DenseMapper::Activity current;
+    std::deque<std::pair<DenseMapper::Activity::Box, Clock::time_point>> recent;
+    void publishActivity() {
+        auto a = std::make_shared<DenseMapper::Activity>(current);
+        const Clock::time_point now = Clock::now();
+        for (const auto& [box, at] : recent) {
+            a->recent.push_back(box);
+            a->recent.back().age = std::chrono::duration<double>(now - at).count();
+        }
+        std::lock_guard<std::mutex> lock(mutex);
+        activity = std::move(a);
+    }
+    std::shared_ptr<const DenseMapper::Activity> activity = std::make_shared<DenseMapper::Activity>();
+
     std::thread thread;
 
     int findNode(int level, int x, int y, int z) const {
@@ -427,6 +442,10 @@ void DenseMapper::Impl::run() {
         if (n >= 0) {
             const Clock::time_point start = Clock::now();
             solve(n, newReference);
+            if (current.solving) {  // gave up part way
+                current.solving = false;
+                publishActivity();
+            }
             lastSolveMs = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
             ++solves;
         }
@@ -624,6 +643,16 @@ void DenseMapper::Impl::solve(int nodeId, bool newReference) {
         if (static_cast<int>(views.size()) >= std::min(params.neighbours, 16)) break;
     }
     if (views.size() < 2) return;
+    current.solving = true;
+    current.current = {lo, hi, n.level, 0, 0};
+    current.reference = refKf.center;
+    current.views.clear();
+    for (const auto& [count, k] : obs) {
+        if (k == ref) continue;
+        for (const View& v : views)
+            if (v.img == &images.at(S.keyframes[k].frame)) current.views.push_back(S.keyframes[k].center);
+    }
+    publishActivity();
 
     // Image region and depth range of the cell in the reference.
     const double toLevel0 = processedToLevel0(refImg);
@@ -882,6 +911,17 @@ void DenseMapper::Impl::solve(int nodeId, bool newReference) {
         }
     }
     cloudDirty = true;
+    DenseMapper::Activity::Box done = current.current;
+    done.points = static_cast<int>(n.batches.back().points.size());
+    recent.push_front({done, Clock::now()});
+    if (recent.size() > 40) recent.pop_back();
+    current.solving = false;
+    publishActivity();
+}
+
+std::shared_ptr<const DenseMapper::Activity> DenseMapper::activity() const {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    return impl_->activity;
 }
 
 void DenseMapper::Impl::publish() {

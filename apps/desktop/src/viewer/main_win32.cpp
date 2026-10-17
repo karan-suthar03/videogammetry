@@ -293,8 +293,9 @@ void drawHud(HDC dc) {
 
     const wchar_t* help[] = {
         L"left-drag orbit   right-drag pan   wheel zoom   C look through camera   F follow camera   R reset view",
-        L"Space pause   M real-time/max speed   T highlight tracked   N noise colors   K keyframes   D dense   +/- point size   O open   E end capture   S save .ply   Esc menu",
-        L"red: current camera   blue: keyframes   orange: camera path   green: points tracked in this frame",
+        L"Space pause   M real-time/max speed   T highlight tracked   N noise colors   K keyframes   D dense   B dense work   +/- point size   O open   E end capture   S save .ply   Esc menu",
+        L"red: current camera   blue: keyframes   orange: camera path   green: points tracked in this frame   "
+        L"yellow box: region being densified (cyan: its cameras), green: done, red: nothing found",
     };
     int hy = g.height - margin - lineH * 3;
     for (const wchar_t* h : help) {
@@ -791,6 +792,7 @@ void onKey(WPARAM key) {
         case 'N': g.cfg.render.colorByNoise = !g.cfg.render.colorByNoise; break;
         case 'K': g.cfg.render.showKeyframes = !g.cfg.render.showKeyframes; break;
         case 'D': g.cfg.render.showDense = !g.cfg.render.showDense; break;
+        case 'B': g.cfg.render.showDenseWork = !g.cfg.render.showDenseWork; break;
         case VK_ADD:
         case VK_OEM_PLUS: g.cfg.render.pointSize = std::min(g.cfg.render.pointSize + 1, 100); break;
         case VK_SUBTRACT:

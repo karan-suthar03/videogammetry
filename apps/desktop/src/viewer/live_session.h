@@ -37,6 +37,7 @@ struct LiveSnapshot {
 
     std::shared_ptr<const std::vector<vg::Point>> dense;  // background dense cloud (may be null)
     vg::DenseMapper::Stats denseStats;
+    std::shared_ptr<const vg::DenseMapper::Activity> denseActivity;
 
     RgbImage thumbnail;  // current video frame with tracked keypoints drawn
 

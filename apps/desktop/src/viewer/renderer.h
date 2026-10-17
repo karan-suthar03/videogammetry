@@ -47,6 +47,7 @@ struct RenderOptions {
     bool colorByNoise = true;     // points colored by depth uncertainty instead of their own color
     bool showKeyframes = true;
     bool showDense = true;        // background dense cloud
+    bool showDenseWork = true;    // the dense solver's current and recent cells, and the cameras it uses
 };
 
 // Draws the map, keyframe and current-camera frustums and the camera path
