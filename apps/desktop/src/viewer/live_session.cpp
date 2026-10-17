@@ -60,7 +60,20 @@ std::shared_ptr<const LiveSnapshot> LiveSession::latest() const {
 
 bool LiveSession::savePly(const std::string& path, std::size_t& pointsWritten) const {
     if (!done_ || !reconstructor_) return false;
-    const vg::PointCloud cloud = reconstructor_->pointCloud();
+    vg::PointCloud cloud = reconstructor_->pointCloud();
+    if (dense_) {  // the current map without what the dense cloud replaced
+        const auto hidden = dense_->hiddenSparse();
+        const float maxNoise = static_cast<float>(settings_.options.maxPointNoisePct / 100.0);
+        const std::vector<vg::MapPoint>& mp = reconstructor_->mapPoints();
+        cloud.points.clear();
+        for (std::size_t i = 0; i < mp.size(); ++i) {
+            const vg::MapPoint& p = mp[i];
+            if (p.bad || (maxNoise > 0 && p.noise > maxNoise)) continue;
+            if (hidden && i < hidden->size() && (*hidden)[i]) continue;
+            cloud.points.push_back({static_cast<float>(p.position.x), static_cast<float>(p.position.y),
+                                    static_cast<float>(p.position.z), p.color[0], p.color[1], p.color[2]});
+        }
+    }
     pointsWritten = cloud.points.size();
     if (dense_) {  // the dense cloud next to it: <name>_dense.ply
         const auto d = dense_->cloud();
@@ -245,9 +258,11 @@ void LiveSession::publish(const vg::FrameView* frame, double processingFps, bool
     s->noise.reserve(mapPoints.size());
     // Hidden like in the saved cloud (Reconstructor::pointCloud).
     const float maxNoise = static_cast<float>(settings_.options.maxPointNoisePct / 100.0);
+    const auto hidden = dense_ ? dense_->hiddenSparse() : nullptr;  // replaced by the dense cloud
     for (std::size_t i = 0; i < mapPoints.size(); ++i) {
         const vg::MapPoint& p = mapPoints[i];
         if (p.bad) continue;
+        if (hidden && i < hidden->size() && (*hidden)[i]) continue;
         if (maxNoise > 0 && p.noise > maxNoise) continue;
         vg::Point q;
         q.x = static_cast<float>(p.position.x);

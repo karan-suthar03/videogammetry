@@ -22,7 +22,7 @@ std::vector<SettingEntry> settingEntries(ViewerSettings& s) {
         {"Playback", "showDense", "Show dense cloud", "", &s.render.showDense, 0, 1, 1},
         {"Dense", "dense", "Dense cloud in the background", "", &s.session.dense, 0, 1, 1},
         {"Dense", "denseImageSize", "Dense image size", "px, long side", &s.session.denseParams.imageSize, 32, kInf, 80},
-        {"Dense", "denseThreads", "Dense threads", "low priority", &s.session.denseParams.threads, 1, kInf, 1},
+        {"Dense", "denseThreads", "Dense threads", "0 = half the cores", &s.session.denseParams.threads, 0, kInf, 1},
         {"Dense", "denseMinNcc", "Dense match threshold", "NCC, -1..1", &s.session.denseParams.minNcc, -1, 1, 0.05},
         {"Dense", "denseNeighbours", "Dense views per region", "", &s.session.denseParams.neighbours, 2, kInf, 1},
         {"Dense", "denseMaxReferences", "Dense references per region", "", &s.session.denseParams.maxReferences, 1, kInf, 1},

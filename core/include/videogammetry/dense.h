@@ -14,9 +14,10 @@ class Reconstructor;
 struct DenseParams {
     // Keyframe images are kept at this long side (pixels) for matching.
     int imageSize = 640;
-    // Worker threads of one region solve (they and the solver thread run at
-    // low OS priority, on CPU time tracking leaves over).
-    int threads = 2;
+    // Worker threads of one region solve, 0 = half the hardware threads
+    // (they and the solver thread run at low OS priority, on CPU time
+    // tracking leaves over).
+    int threads = 0;
     // Volume hierarchy: cubic cells, the smallest 1/16 of the median scene
     // depth of the first map snapshot, each level twice the size of the one
     // below. A cell is solved once at least `minSparsePoints` map points lie
@@ -28,16 +29,26 @@ struct DenseParams {
     int maxRegionPx = 160;
     // Plane sweep: depths tried per pixel (evenly in inverse depth over the
     // cell), every `pixelStep` pixels of the cell's image region.
-    int depthSamples = 64;
+    // The best one is then searched again around it with 8 finer steps.
+    int depthSamples = 32;
     int pixelStep = 2;
     // Views matched against the reference: the keyframes sharing the most
     // map points with the cell, seen at an angle within these bounds.
     int neighbours = 5;
     double minAngleDeg = 2.0, maxAngleDeg = 40.0;
     // A depth is kept when the two best views reach this normalized cross
-    // correlation (5x5 patch) there; texture-less patches are skipped.
+    // correlation (5x5 patch) there and `minAgreeing` views (fewer if the
+    // cell has fewer) come within 0.1 of it; texture-less patches and sky
+    // are skipped.
     double minNcc = 0.65;
     double minPatchStd = 3.0;  // gray levels
+    int minAgreeing = 3;
+    // Map points it replaces: those in cells it has solved (with at least
+    // `coverPoints` dense points), those in front of a measured dense surface
+    // (in free space: floating outliers), and those that most of their
+    // keyframes see on sky (smooth bright area connected to the image top).
+    int coverPoints = 50;
+    double freeSpaceMargin = 0.15;  // relative to the surface depth
     // Per cell, solved from up to this many reference keyframes over time
     // (covers what one view cannot see); revisits with enough new views
     // solve a reference again with them.
@@ -76,11 +87,16 @@ public:
         int solvedRegions = 0;
         int solves = 0;         // region solves run so far
         int images = 0;
+        long hiddenSparse = 0;  // map points it replaces or removes
         double lastSolveMs = 0;
     };
     // Any thread: the dense cloud with the latest keyframe poses.
     std::shared_ptr<const std::vector<Point>> cloud() const;
     Stats stats() const;
+    // Per map point (index into Reconstructor::mapPoints() at the last
+    // update; later points are not covered): 1 = replaced or removed by the
+    // dense solver. May be null.
+    std::shared_ptr<const std::vector<std::uint8_t>> hiddenSparse() const;
 
 private:
     struct Impl;

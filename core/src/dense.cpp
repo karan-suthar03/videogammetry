@@ -35,7 +35,63 @@ struct KeyImage {
     std::vector<std::uint8_t> rgb;  // level 1 size
     int rgbWidth = 0, rgbHeight = 0;
     double fromInput = 1.0;  // level-0 pixels per input-frame pixel
+    std::vector<std::uint8_t> sky;  // level 2: 1 = sky
+    std::vector<float> surface;     // level 2: nearest dense depth measured from here (0 = none)
+    bool isSky(int x2, int y2) const {  // with its 8 neighbours
+        const Image& g = gray[2];
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                const int x = std::clamp(x2 + dx, 0, g.width - 1), y = std::clamp(y2 + dy, 0, g.height - 1);
+                if (!sky[static_cast<std::size_t>(y) * g.width + x]) return false;
+            }
+        return true;
+    }
 };
+
+// Sky: smooth, bright pixels connected to the top of the image through
+// smooth bright pixels (level 2).
+void computeSky(KeyImage& k) {
+    const Image& g = k.gray[2];
+    const int w = g.width, h = g.height;
+    std::vector<int> hist(256, 0);
+    for (std::uint8_t v : g.data) ++hist[v];
+    int p90 = 255;
+    for (int acc = 0, v = 0; v < 256; ++v) {
+        acc += hist[v];
+        if (acc >= 0.9 * g.data.size()) {
+            p90 = v;
+            break;
+        }
+    }
+    const int bright = std::max(60, p90 * 6 / 10);
+    std::vector<std::uint8_t> candidate(g.data.size(), std::uint8_t{0});
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            const int c = g.at(x, y);
+            const int gx = std::abs(g.at(std::min(x + 1, w - 1), y) - g.at(std::max(x - 1, 0), y));
+            const int gy = std::abs(g.at(x, std::min(y + 1, h - 1)) - g.at(x, std::max(y - 1, 0)));
+            candidate[static_cast<std::size_t>(y) * w + x] = c >= bright && gx + gy <= 6;
+        }
+    k.sky.assign(g.data.size(), std::uint8_t{0});
+    std::vector<int> stack;
+    for (int x = 0; x < w; ++x)
+        if (candidate[x]) {
+            k.sky[x] = 1;
+            stack.push_back(x);
+        }
+    while (!stack.empty()) {
+        const int i = stack.back();
+        stack.pop_back();
+        const int x = i % w, y = i / w;
+        const int next[4] = {x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1};
+        for (int j : next)
+            if (j >= 0 && candidate[j] && !k.sky[j]) {
+                k.sky[j] = 1;
+                stack.push_back(j);
+            }
+    }
+    k.surface.assign(g.data.size(), 0.0f);
+}
 
 struct Pending {
     long frame = 0;
@@ -54,6 +110,8 @@ struct Snapshot {
         std::vector<int> points;  // into `points`
     };
     std::vector<Vec3> points;
+    std::vector<int> mapId;  // per point: index in Reconstructor::mapPoints()
+    std::size_t mapPoints = 0;
     std::vector<Keyframe> keyframes;
 };
 
@@ -133,6 +191,7 @@ KeyImage makeKeyImage(const FrameView& view, int imageSize) {
     }
     k.fromInput = double(w) / view.width;
     for (int l = 1; l < kPyramid; ++l) halve(k.gray[l - 1], k.gray[l]);
+    computeSky(k);
 
     // Color at level 1: box average of the input pixels each one covers.
     k.rgbWidth = k.gray[1].width;
@@ -221,6 +280,7 @@ struct DenseMapper::Impl {
     std::deque<Pending> pending;
     std::shared_ptr<const Snapshot> nextSnapshot;
     std::shared_ptr<const std::vector<Point>> cloud = std::make_shared<std::vector<Point>>();
+    std::shared_ptr<const std::vector<std::uint8_t>> hidden;
     Stats stats;
     Clock::time_point lastUpdate{};
 
@@ -268,7 +328,8 @@ struct DenseMapper::Impl {
 
 DenseMapper::DenseMapper(const DenseParams& params) : impl_(std::make_unique<Impl>()) {
     impl_->params = params;
-    if (params.threads > 1) impl_->pool = std::make_unique<ThreadPool>(params.threads, true);
+    const int threads = params.threads > 0 ? params.threads : std::max(1, ThreadPool::hardwareThreads() / 2);
+    if (threads > 1) impl_->pool = std::make_unique<ThreadPool>(threads, true);
     impl_->thread = std::thread([this] { impl_->run(); });
 }
 
@@ -309,7 +370,9 @@ void DenseMapper::updateMap(const Reconstructor& r, bool force) {
         if (mapPoints[i].bad || mapPoints[i].observations.size() < 2) continue;
         compact[i] = static_cast<int>(s->points.size());
         s->points.push_back(mapPoints[i].position);
+        s->mapId.push_back(static_cast<int>(i));
     }
+    s->mapPoints = mapPoints.size();
     s->keyframes.reserve(r.keyframes().size());
     for (const Keyframe& k : r.keyframes()) {
         Snapshot::Keyframe sk;
@@ -332,6 +395,11 @@ void DenseMapper::updateMap(const Reconstructor& r, bool force) {
 std::shared_ptr<const std::vector<Point>> DenseMapper::cloud() const {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     return impl_->cloud;
+}
+
+std::shared_ptr<const std::vector<std::uint8_t>> DenseMapper::hiddenSparse() const {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    return impl_->hidden;
 }
 
 DenseMapper::Stats DenseMapper::stats() const {
@@ -532,7 +600,7 @@ void DenseMapper::Impl::solve(int nodeId, bool newReference) {
     }
     if (ref < 0) return;
     const Snapshot::Keyframe& refKf = S.keyframes[ref];
-    const KeyImage& refImg = images.at(refKf.frame);
+    KeyImage& refImg = images.at(refKf.frame);
     const double refDist = norm(center - refKf.center);
 
     // Neighbours: seen at a usable angle and a similar distance.
@@ -553,7 +621,7 @@ void DenseMapper::Impl::solve(int nodeId, bool newReference) {
         v.R = S.keyframes[k].pose.R * refKf.pose.R.transposed();
         v.t = S.keyframes[k].pose.t - v.R * refKf.pose.t;
         views.push_back(v);
-        if (static_cast<int>(views.size()) >= params.neighbours) break;
+        if (static_cast<int>(views.size()) >= std::min(params.neighbours, 16)) break;
     }
     if (views.size() < 2) return;
 
@@ -620,14 +688,16 @@ void DenseMapper::Impl::solve(int nodeId, bool newReference) {
     const float minNcc = static_cast<float>(params.minNcc);
     const float minStd = static_cast<float>(params.minPatchStd);
     const double margin2 = 0.1 * cell;
+    const int needAgree = std::min(std::max(params.minAgreeing, 2), static_cast<int>(views.size()));
 
     parallelFor(pool.get(), 0, gh, 1, [&](int rowBegin, int rowEnd) {
-        std::vector<float> ncc(views.size() * D);
+        std::vector<float> ncc(views.size());
         std::vector<float> agg(D);
         for (int gy = rowBegin; gy < rowEnd; ++gy) {
             const int y = y0 + gy * step;
             for (int gx = 0; gx < gw; ++gx) {
                 const int x = x0 + gx * step;
+                if (refImg.isSky(static_cast<int>((x + 0.5) * (1 << level) / 4), static_cast<int>((y + 0.5) * (1 << level) / 4))) continue;
                 // Reference patch, normalized.
                 float patch[kPatchSize];
                 float mean = 0;
@@ -647,69 +717,90 @@ void DenseMapper::Impl::solve(int nodeId, bool newReference) {
                 for (float& p : patch) p *= invNorm;
 
                 const Vec3 r0 = cam.ray(x, y), rx = cam.ray(x + 1, y), ry = cam.ray(x, y + 1);
+                Vec3 a0[16], ax[16], ay[16];
                 for (std::size_t j = 0; j < views.size(); ++j) {
-                    const View& view = views[j];
-                    const Image& img = view.img->gray[level];
-                    const Vec3 a0 = view.R * r0, ax = view.R * rx, ay = view.R * ry;
-                    float* out = ncc.data() + j * D;
-                    for (int k = 0; k < D; ++k) {
-                        out[k] = -1;
-                        const double z = 1.0 / (invFar + (invNear - invFar) * k / (D - 1));
-                        const Vec3 p0 = a0 * z + view.t, px = ax * z + view.t, py = ay * z + view.t;
+                    a0[j] = views[j].R * r0;
+                    ax[j] = views[j].R * rx;
+                    ay[j] = views[j].R * ry;
+                }
+                // NCC of every view at inverse depth `inv` into `out`; returns
+                // the mean of the two best (occlusion in the others).
+                const auto evaluate = [&](double inv, float* out) {
+                    const double z = 1.0 / inv;
+                    for (std::size_t j = 0; j < views.size(); ++j) {
+                        const View& view = views[j];
+                        const Image& img = view.img->gray[level];
+                        out[j] = -1;
+                        const Vec3 p0 = a0[j] * z + view.t, px = ax[j] * z + view.t, py = ay[j] * z + view.t;
                         if (p0.z <= 0 || px.z <= 0 || py.z <= 0) continue;
                         double qu, qv, qxu, qxv, qyu, qyv;
                         cam.project(p0, qu, qv);
                         cam.project(px, qxu, qxv);
                         cam.project(py, qyu, qyv);
                         const double axu = qxu - qu, axv = qxv - qv, ayu = qyu - qu, ayv = qyv - qv;
-                        // Patch corners inside the image (it is convex).
                         const double ex = kPatchRadius * (std::abs(axu) + std::abs(ayu));
                         const double ey = kPatchRadius * (std::abs(axv) + std::abs(ayv));
                         if (qu - ex < 0 || qv - ey < 0 || qu + ex >= img.width - 1 || qv + ey >= img.height - 1) continue;
-                        float s[kPatchSize];
+                        float smp[kPatchSize];
                         float sm = 0;
                         for (int i = 0; i < kPatchSize; ++i) {
                             const double dx = (i % kPatch - kPatch / 2) * kPatchSpacing;
                             const double dy = (i / kPatch - kPatch / 2) * kPatchSpacing;
-                            s[i] = sampleBilinear(img, qu + axu * dx + ayu * dy, qv + axv * dx + ayv * dy);
-                            sm += s[i];
+                            smp[i] = sampleBilinear(img, qu + axu * dx + ayu * dy, qv + axv * dx + ayv * dy);
+                            sm += smp[i];
                         }
                         sm /= kPatchSize;
                         float dotp = 0, sv = 0;
                         for (int i = 0; i < kPatchSize; ++i) {
-                            const float d = s[i] - sm;
+                            const float d = smp[i] - sm;
                             dotp += d * patch[i];
                             sv += d * d;
                         }
-                        if (sv > 1e-6f) out[k] = dotp / std::sqrt(sv);
+                        if (sv > 1e-6f) out[j] = dotp / std::sqrt(sv);
                     }
-                }
-                // Per depth: mean of the two best views (occlusion in the others).
-                int bestK = -1;
-                float bestScore = -2, bestSecond = -2;
-                for (int k = 0; k < D; ++k) {
                     float b1 = -1, b2 = -1;
                     for (std::size_t j = 0; j < views.size(); ++j) {
-                        const float c = ncc[j * D + k];
-                        if (c > b1) {
+                        if (out[j] > b1) {
                             b2 = b1;
-                            b1 = c;
-                        } else if (c > b2) {
-                            b2 = c;
+                            b1 = out[j];
+                        } else if (out[j] > b2) {
+                            b2 = out[j];
                         }
                     }
-                    agg[k] = 0.5f * (b1 + b2);
+                    return 0.5f * (b1 + b2);
+                };
+                const auto invAt = [&](double k) { return invFar + (invNear - invFar) * k / (D - 1); };
+                int bestK = -1;
+                float bestScore = -2;
+                for (int k = 0; k < D; ++k) {
+                    agg[k] = evaluate(invAt(k), ncc.data());
                     if (agg[k] > bestScore) {
                         bestScore = agg[k];
-                        bestSecond = b2;
                         bestK = k;
                     }
                 }
-                if (bestK <= 0 || bestK >= D - 1 || bestSecond < minNcc) continue;
-                const float am = agg[bestK - 1], a0 = agg[bestK], ap = agg[bestK + 1];
-                const float denom = am - 2 * a0 + ap;
+                if (bestK <= 0 || bestK >= D - 1 || bestScore < minNcc - 0.1f) continue;
+                // Finer search between the neighbouring samples.
+                constexpr int kFine = 8;
+                float fine[kFine + 2];
+                double fineInv[kFine + 2];
+                int bestF = 0;
+                for (int f = 0; f < kFine + 2; ++f) {
+                    fineInv[f] = invAt(bestK - 1 + 2.0 * f / (kFine + 1));
+                    fine[f] = f == 0 ? agg[bestK - 1] : (f == kFine + 1 ? agg[bestK + 1] : evaluate(fineInv[f], ncc.data()));
+                    if (fine[f] > fine[bestF]) bestF = f;
+                }
+                if (bestF == 0 || bestF == kFine + 1) continue;
+                const float am = fine[bestF - 1], ac = fine[bestF], ap = fine[bestF + 1];
+                const float denom = am - 2 * ac + ap;
                 const double offset = denom < 0 ? std::clamp(0.5f * (am - ap) / denom, -0.5f, 0.5f) : 0.0;
-                const double z = 1.0 / (invFar + (invNear - invFar) * (bestK + offset) / (D - 1));
+                const double inv = fineInv[bestF] + offset * (fineInv[bestF + 1] - fineInv[bestF]);
+                // Agreement at the chosen depth.
+                if (evaluate(inv, ncc.data()) < minNcc) continue;
+                int agreeing = 0;
+                for (std::size_t j = 0; j < views.size(); ++j) agreeing += ncc[j] >= minNcc - 0.1f;
+                if (agreeing < needAgree) continue;
+                const double z = 1.0 / inv;
                 const Vec3 world = refKf.pose.R.transposed() * (r0 * z - refKf.pose.t);
                 if (world.x < lo.x - margin2 || world.y < lo.y - margin2 || world.z < lo.z - margin2 ||
                     world.x > hi.x + margin2 || world.y > hi.y + margin2 || world.z > hi.z + margin2) {
@@ -753,6 +844,12 @@ void DenseMapper::Impl::solve(int nodeId, bool newReference) {
             p.u = static_cast<float>((lu + 0.5) * toProcessed - 0.5);
             p.v = static_cast<float>((lv + 0.5) * toProcessed - 0.5);
             p.z = z;
+            {  // free space in front of it, seen from the reference
+                const int sx = std::clamp(static_cast<int>((lu + 0.5) / 4), 0, refImg.gray[2].width - 1);
+                const int sy = std::clamp(static_cast<int>((lv + 0.5) / 4), 0, refImg.gray[2].height - 1);
+                float& d = refImg.surface[static_cast<std::size_t>(sy) * refImg.gray[2].width + sx];
+                d = d > 0 ? std::min(d, z) : z;
+            }
             const int cu = std::clamp(static_cast<int>(std::lround((lu + 0.5) / 2 - 0.5)), 0, refImg.rgbWidth - 1);
             const int cv = std::clamp(static_cast<int>(std::lround((lv + 0.5) / 2 - 0.5)), 0, refImg.rgbHeight - 1);
             const std::uint8_t* c = refImg.rgb.data() + (static_cast<std::size_t>(cv) * refImg.rgbWidth + cu) * 3;
@@ -806,11 +903,72 @@ void DenseMapper::Impl::publish() {
         }
     }
     st.points = static_cast<long>(out->size());
+
+    // Map points the dense cloud replaces or removes.
+    const Snapshot& S = *snap;
+    auto hide = std::make_shared<std::vector<std::uint8_t>>(S.mapPoints, std::uint8_t{0});
+    std::vector<int> nodePoints(nodes.size(), 0);
+    for (std::size_t i = 0; i < nodes.size(); ++i)
+        for (const Batch& b : nodes[i].batches) nodePoints[i] += static_cast<int>(b.points.size());
+    struct Surface {
+        const KeyImage* img;
+        const Pose* pose;
+        LevelCamera cam;
+    };
+    std::vector<Surface> surfaces;
+    std::vector<int> skyVotes(S.points.size(), 0), groundVotes(S.points.size(), 0);
+    for (const Snapshot::Keyframe& k : S.keyframes) {
+        const auto it = images.find(k.frame);
+        if (it == images.end()) continue;
+        const KeyImage& img = it->second;
+        const LevelCamera cam = levelCamera(S.K, processedToLevel0(img), 2);
+        if (std::any_of(img.surface.begin(), img.surface.end(), [](float d) { return d > 0; })) {
+            surfaces.push_back({&img, &k.pose, cam});
+        }
+        for (int p : k.points) {
+            const Vec3 c = k.pose.transform(S.points[p]);
+            if (c.z <= 0) continue;
+            double u, v;
+            cam.project(c, u, v);
+            const int x = static_cast<int>(std::lround(u)), y = static_cast<int>(std::lround(v));
+            if (x < 0 || y < 0 || x >= img.gray[2].width || y >= img.gray[2].height) continue;
+            ++(img.isSky(x, y) ? skyVotes[p] : groundVotes[p]);
+        }
+    }
+    const int top = std::clamp(params.levels, 1, 12) - 1;
+    const float keep = static_cast<float>(1.0 - params.freeSpaceMargin);
+    for (std::size_t i = 0; i < S.points.size(); ++i) {
+        const Vec3& X = S.points[i];
+        bool remove = skyVotes[i] > groundVotes[i];
+        for (int l = 0; l <= top && !remove; ++l) {  // the deepest solved cell holding it
+            const double cell = cellSize(l);
+            const int id = findNode(l, cellIndex(X.x, cell), cellIndex(X.y, cell), cellIndex(X.z, cell));
+            if (id < 0 || !nodes[id].solved) continue;
+            remove = nodePoints[id] >= params.coverPoints;
+            break;
+        }
+        for (std::size_t s2 = 0; s2 < surfaces.size() && !remove; ++s2) {
+            const Surface& f = surfaces[s2];
+            const Vec3 c = f.pose->transform(X);
+            if (c.z <= 0) continue;
+            double u, v;
+            f.cam.project(c, u, v);
+            const int x = static_cast<int>(std::lround(u)), y = static_cast<int>(std::lround(v));
+            if (x < 0 || y < 0 || x >= f.img->gray[2].width || y >= f.img->gray[2].height) continue;
+            const float d = f.img->surface[static_cast<std::size_t>(y) * f.img->gray[2].width + x];
+            remove = d > 0 && c.z < keep * d;
+        }
+        if (remove) {
+            (*hide)[S.mapId[i]] = 1;
+            ++st.hiddenSparse;
+        }
+    }
     st.solves = solves;
     st.images = static_cast<int>(images.size());
     st.lastSolveMs = lastSolveMs;
     std::lock_guard<std::mutex> lock(mutex);
     cloud = std::move(out);
+    hidden = std::move(hide);
     stats = st;
 }
 
