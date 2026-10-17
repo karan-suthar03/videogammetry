@@ -63,6 +63,8 @@ std::vector<SettingEntry> optionEntries(vg::Reconstructor::Options& o) {
         {"Fusion", "fuseRadiusPx", "Fusion radius", "px", &m.fuseRadiusPx, 0, kInf, 0.5},
         {"Fusion", "fuseMerge", "Merge duplicate points", "", &m.fuseMerge, 0, 1, 1},
 
+        {"Bundle adjustment", "mappingThread", "Local BA on a mapping thread", "off = deterministic", &m.mappingThread, 0, 1, 1},
+        {"Bundle adjustment", "mappingThreads", "Mapping thread workers", "0 = half the cores", &m.mappingThreads, 0, kInf, 1},
         {"Bundle adjustment", "localBAKeyframes", "Local BA keyframes", "0 = off", &m.localBAKeyframes, 0, kInf, 1},
         {"Bundle adjustment", "localBAIterations", "Local BA iterations", "", &m.localBAIterations, 0, kInf, 1},
         {"Bundle adjustment", "globalBAIterations", "Final global BA iterations", "0 = off", &m.globalBAIterations, 0, kInf, 5},
@@ -255,6 +257,15 @@ const char* settingDetails(const char* key) {
          "When a fused projection lands on a feature that already has its own point, the two points are merged "
          "into one. Off only links points to features that have no point yet."},
 
+        {"mappingThread",
+         "Solves the local and focal bundle adjustments on a separate mapping thread while tracking carries on, "
+         "and merges each result at the first frame after it finishes (keyframes added meanwhile are covered by "
+         "the next one). The frame that becomes a keyframe then only pays for triangulation and fusion instead "
+         "of waiting for the adjustment, which removes the biggest per-frame spikes. Off solves them inline on "
+         "that frame: slower worst-case frames, but fully deterministic results (with background BA off too)."},
+        {"mappingThreads",
+         "Worker threads of the mapping thread's bundle adjustment; 0 uses half the hardware threads. More solves "
+         "each adjustment sooner (fresher map for tracking) but competes with tracking and extraction for cores."},
         {"localBAKeyframes",
          "After each new keyframe, it and its most connected keyframes (this many in all) are refined together "
          "with their points by bundle adjustment, which keeps the local map consistent. 0 turns local refinement "

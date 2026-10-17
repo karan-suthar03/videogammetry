@@ -85,7 +85,7 @@ CMakePresets.json      presets: windows (MSVC), linux (Ninja)
 
 ## 8. Tech constraints
 - **OS:** cross-platform (developed on Windows 11)
-- **GPU:** optional Vulkan compute backend (`gpu/`, `VG_GPU=ON` by default). Vulkan is loaded at run time (volk), so the apps still start without a driver; headers, volk and the glslang shader compiler are fetched by CMake (`cmake/Vulkan.cmake`, pinned, ~17 MB once), no Vulkan SDK needed. Done: feature extraction (`--gpu` in the CLI, a menu setting in the viewer; identical keypoints, ~1 descriptor bit in 3 million differs; `tools/gpu_check` verifies). Next: mapping on its own thread, then local BA and the triangulation/fusion searches on the GPU
+- **GPU:** optional Vulkan compute backend (`gpu/`, `VG_GPU=ON` by default). Vulkan is loaded at run time (volk), so the apps still start without a driver; headers, volk and the glslang shader compiler are fetched by CMake (`cmake/Vulkan.cmake`, pinned, ~17 MB once), no Vulkan SDK needed. Done: feature extraction (`--gpu` in the CLI, a menu setting in the viewer; identical keypoints, ~1 descriptor bit in 3 million differs; `tools/gpu_check` verifies). Mapping thread done (local/focal BA solved off the tracking thread, merged before the next keyframe; `--no-mapping-thread` for the old deterministic path). Next: local BA and the triangulation/fusion searches on the GPU
 - **Language:** C++20 core; Java (JNI) shim on Android
 - **References:** `references/colmap`, `references/ORB_SLAM3`
 - **Allowed libraries (candidates):** <!-- e.g. OpenCV (video I/O, features, geometry), Eigen (math), Ceres (bundle adjustment) -->

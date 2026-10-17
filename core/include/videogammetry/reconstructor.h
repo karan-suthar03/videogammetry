@@ -198,6 +198,12 @@ private:
     BAReport applyJob(BAJob& job);
     // Merges a finished background pass and starts the next one.
     void pollBackgroundBA();
+    // Mapping thread (MappingParams::mappingThread): merges the finished
+    // local / focal BA (waiting for it if `wait`), then starts the pending one
+    // (if `startPending`).
+    void pollMappingJob(bool wait, bool startPending = true);
+    void startMappingJob(bool focal);
+    void cancelMappingJob();
     // Stops a running background pass without merging it.
     void cancelBackgroundBA();
     void startNewMap();
@@ -245,6 +251,15 @@ private:
     std::vector<MapPoint> points_;
     std::vector<int> recentPoints_;  // points still on probation
     long mapEpoch_ = 0;              // increases when a new map is started
+
+    // Mapping thread: the local or focal BA in flight, and what keyframes
+    // asked for meanwhile.
+    std::unique_ptr<ThreadPool> mappingPool_;
+    std::unique_ptr<BAJob> mappingJob_;
+    bool mappingJobFocal_ = false;
+    bool localBAPending_ = false, focalBAPending_ = false;
+    std::atomic<bool> cancelMapping_{false};
+    std::future<void> mappingDone_;
 
     // Background global BA: the running pass (declared last: destroyed, i.e.
     // waited for, before everything it uses).

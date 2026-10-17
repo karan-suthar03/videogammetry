@@ -44,6 +44,7 @@ void printUsage() {
         "  --confirm <n>               keyframes that must see a new point to keep it, 2 = no culling (default 3)\n"
         "  --fixed-focal               keep the --fov focal length (no self-calibration)\n"
         "  --no-background-ba          no continuous global BA on a background thread (deterministic results)\n"
+        "  --no-mapping-thread         solve local BA inline on the keyframe's frame (deterministic results)\n"
         "  --fuse <n>                  covisible keyframes to fuse points with, 0 = no fusion (default 10)\n"
         "  --no-merge                  fusion only links points to free keypoints, never merges duplicates\n"
         "  --fov <deg>                 assumed field of view across the long side of the frame (default 65)\n"
@@ -125,6 +126,8 @@ int main(int argc, char** argv) {
             options.orb.centerBoost = static_cast<float>(std::strtod(argv[++i], nullptr));
         } else if (std::strcmp(argv[i], "--no-merge") == 0) {
             options.mapping.fuseMerge = false;
+        } else if (std::strcmp(argv[i], "--no-mapping-thread") == 0) {
+            options.mapping.mappingThread = false;
         } else if (std::strcmp(argv[i], "--no-background-ba") == 0) {
             options.mapping.backgroundBA = false;
         } else if (std::strcmp(argv[i], "--fixed-focal") == 0) {

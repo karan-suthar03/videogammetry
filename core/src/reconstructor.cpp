@@ -36,7 +36,10 @@ Reconstructor::Reconstructor(const Options& options)
       pool_(makePool(options.threads)),
       extractor_(options.processSize, options.orb, pool_.get()) {}
 
-Reconstructor::~Reconstructor() { cancelBackgroundBA(); }
+Reconstructor::~Reconstructor() {
+    cancelMappingJob();
+    cancelBackgroundBA();
+}
 
 void Reconstructor::addFrame(const FrameView& frame) {
     if (frame.data == nullptr || frame.width <= 0 || frame.height <= 0) return;
@@ -110,6 +113,7 @@ void Reconstructor::addFeatures(FrameFeatures&& features) {
             if (++lostCount_ > options_.mapping.maxLostFrames) startNewMap();
         }
     }
+    if (options_.mapping.mappingThread) pollMappingJob(false);
     pollBackgroundBA();
     ++frameCount_;
 }
@@ -464,6 +468,17 @@ bool Reconstructor::track() {
 }
 
 void Reconstructor::addKeyframe() {
+    // A new keyframe builds on a refined map, as when local BA runs inline:
+    // merge the local adjustment in flight first (usually finished by now; it
+    // has had the frames since the last keyframe). Its successor starts below,
+    // for this keyframe, once triangulation and fusion are done. A focal
+    // refinement (a much larger window, every few keyframes, intrinsics only
+    // change slowly) is not waited for: it is merged whenever it finishes.
+    if (options_.mapping.mappingThread) {
+        auto t = profiler_.scope("kf.ba wait");
+        pollMappingJob(!mappingJobFocal_, false);
+        localBAPending_ = false;  // superseded by this keyframe's
+    }
     Keyframe kf;
     kf.frameIndex = static_cast<long>(frameCount_);
     kf.pose = pose_;
@@ -515,7 +530,14 @@ void Reconstructor::addKeyframe() {
         searchInNeighbors(n - 1);
     }
 
-    if (mp.localBAKeyframes > 0) {
+    const bool focalDue = mp.refineFocal && !backgroundOwnsIntrinsics_ && mp.focalEveryKeyframes > 0 &&
+                          n % mp.focalEveryKeyframes == 0 && n >= mp.focalBAKeyframes;
+    if (mp.mappingThread) {
+        // Solved on the mapping thread; this frame goes on without waiting.
+        if (mp.localBAKeyframes > 0) localBAPending_ = true;
+        if (focalDue) focalBAPending_ = true;
+        pollMappingJob(false);
+    } else if (mp.localBAKeyframes > 0) {
         // The new keyframe and the keyframes sharing the most points with it
         // (counted after triangulation, which adds shared points).
         std::vector<int> local{n - 1};
@@ -535,8 +557,7 @@ void Reconstructor::addKeyframe() {
             previousPose_ = pose_;
         }
     }
-    if (mp.refineFocal && !backgroundOwnsIntrinsics_ && mp.focalEveryKeyframes > 0 && n % mp.focalEveryKeyframes == 0 &&
-        n >= mp.focalBAKeyframes) {
+    if (!mp.mappingThread && focalDue) {
         std::vector<int> window{n - 1};
         for (const auto& [k, shared] : covisibleKeyframes(n - 1)) {
             if (static_cast<int>(window.size()) >= mp.focalBAKeyframes) break;
@@ -729,6 +750,74 @@ BAReport Reconstructor::applyJob(BAJob& job) {
 
     if (job.params.refineFocal) undistortAll();
     return report;
+}
+
+void Reconstructor::cancelMappingJob() {
+    localBAPending_ = focalBAPending_ = false;
+    if (!mappingJob_) return;
+    cancelMapping_ = true;
+    mappingDone_.wait();
+    mappingJob_.reset();
+    cancelMapping_ = false;
+}
+
+void Reconstructor::pollMappingJob(bool wait, bool startPending) {
+    using Clock = std::chrono::steady_clock;
+    if (mappingJob_) {
+        if (!wait && mappingDone_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+        mappingDone_.get();
+        const auto t0 = Clock::now();
+        const BAReport r = applyJob(*mappingJob_);
+        if (!mappingJobFocal_ && r.ok) {
+            ++stats_.localBAs;
+            stats_.localBARmsBefore += r.initialRmsPx;
+            stats_.localBARmsAfter += r.finalRmsPx;
+            stats_.localBAOutliers += r.outliers;
+        }
+        // Solve time on the mapping thread (*), merge time on this one.
+        profiler_.add(mappingJobFocal_ ? "kf.focal ba*" : "kf.local ba*", mappingJob_->solveMs);
+        mappingJob_.reset();
+        profiler_.add("kf.ba merge", std::chrono::duration<double, std::milli>(Clock::now() - t0).count());
+    }
+    if (!startPending || state_ != State::Tracking || keyframes_.size() < 2) return;
+    if (focalBAPending_) {
+        focalBAPending_ = false;
+        startMappingJob(true);
+    } else if (localBAPending_) {
+        localBAPending_ = false;
+        startMappingJob(false);
+    }
+}
+
+void Reconstructor::startMappingJob(bool focal) {
+    using Clock = std::chrono::steady_clock;
+    const MappingParams& mp = options_.mapping;
+    const int n = static_cast<int>(keyframes_.size());
+    // The newest keyframe and the keyframes sharing the most points with it.
+    const int size = focal ? mp.focalBAKeyframes : mp.localBAKeyframes;
+    std::vector<int> window{n - 1};
+    for (const auto& [k, shared] : covisibleKeyframes(n - 1)) {
+        if (static_cast<int>(window.size()) >= size) break;
+        window.push_back(k);
+    }
+    {
+        auto t = profiler_.scope("kf.ba build");
+        mappingJob_ = buildJob(window, mp.localBAIterations, focal);
+    }
+    if (!mappingJob_) return;
+    mappingJobFocal_ = focal;
+    mappingJob_->params.cancel = &cancelMapping_;
+    if (!mappingPool_) {
+        const int threads = mp.mappingThreads > 0 ? mp.mappingThreads : std::max(1, ThreadPool::hardwareThreads() / 2);
+        if (threads > 1) mappingPool_ = std::make_unique<ThreadPool>(threads);
+    }
+    BAJob* job = mappingJob_.get();
+    ThreadPool* pool = mappingPool_.get();
+    mappingDone_ = std::async(std::launch::async, [job, pool] {
+        const auto start = Clock::now();
+        job->report = bundleAdjust(job->problem, job->focal, job->params, pool);
+        job->solveMs = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+    });
 }
 
 void Reconstructor::cancelBackgroundBA() {
@@ -1091,7 +1180,11 @@ void Reconstructor::cullRecentPoints() {
 }
 
 void Reconstructor::finish() {
-    cancelBackgroundBA();  // the final global BA below supersedes it
+    // Merge the local BA in flight; the final global BA below supersedes the
+    // pending ones and the background pass.
+    localBAPending_ = focalBAPending_ = false;
+    pollMappingJob(true);
+    cancelBackgroundBA();
     const int iterations = options_.mapping.globalBAIterations;
     if (iterations <= 0 || keyframes_.size() < 2) return;
     auto t = profiler_.scope("global ba");
@@ -1311,6 +1404,7 @@ void Reconstructor::startNewMap() {
     points_.clear();
     recentPoints_.clear();
     ++mapEpoch_;  // a running background pass belongs to the old map
+    cancelMappingJob();  // so does the local BA in flight
     backgroundOwnsIntrinsics_ = false;
     reference_ = FrameData{};
     state_ = State::Initializing;

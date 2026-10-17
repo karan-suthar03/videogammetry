@@ -93,6 +93,16 @@ struct MappingParams {
     int focalBAKeyframes = 20;
     double focalMaxStd = 0.01;
     double focalPriorSigma = 0.05;
+    // Mapping thread: local and focal bundle adjustment are solved on their
+    // own worker (`mappingThreads` threads, 0 = half the hardware threads)
+    // while tracking continues, and merged at the first frame boundary after
+    // they finish; keyframes added meanwhile wait for the next one. A frame
+    // that becomes a keyframe then costs triangulation and fusion only. Off =
+    // solved inline on that frame (deterministic, but the frame takes as long
+    // as the adjustment).
+    bool mappingThread = true;
+    int mappingThreads = 0;
+
     // Background global bundle adjustment: while frames keep being tracked,
     // the whole map (old parts included) is re-optimized on a separate thread
     // with `backgroundBAThreads` workers (0 = half the hardware threads), and
