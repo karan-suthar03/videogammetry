@@ -14,7 +14,7 @@ namespace {
 
 // Keypoints keep this distance from the level border so that the orientation
 // patch (radius 15), the rotated BRIEF pattern and the Harris window all fit.
-constexpr int kBorder = 18;
+constexpr int kBorder = kOrbBorder;
 constexpr int kPatchRadius = 15;
 constexpr int kHarrisRadius = 3;
 
@@ -130,6 +130,8 @@ Descriptor computeDescriptor(const Image& blurred, int x, int y, float angle) {
 
 }  // namespace
 
+const std::array<BriefTest, 256>& learnedBriefPattern() { return kLearnedBriefPattern; }
+
 std::vector<BriefTest> randomBriefTests(int count, std::uint32_t seed) {
     // Own Box-Muller on raw mt19937 output: std::normal_distribution differs
     // between standard libraries, this does not.
@@ -188,12 +190,18 @@ OrbExtractor::OrbExtractor(const OrbParams& params, ThreadPool* pool) : params_(
     budgets_[levels - 1] = std::max(params_.maxFeatures - assigned, 0);
 }
 
+void OrbExtractor::levelSize(int width, int height, float scale, int& levelWidth, int& levelHeight) {
+    levelWidth = static_cast<int>(std::round(width / scale));
+    levelHeight = static_cast<int>(std::round(height / scale));
+    if (levelWidth <= 2 * kBorder || levelHeight <= 2 * kBorder) levelWidth = levelHeight = 0;
+}
+
 void OrbExtractor::buildPyramid(const Image& gray) {
     pyramid_[0] = gray;
     for (std::size_t i = 1; i < pyramid_.size(); ++i) {
-        const int w = static_cast<int>(std::round(gray.width / scales_[i]));
-        const int h = static_cast<int>(std::round(gray.height / scales_[i]));
-        if (w <= 2 * kBorder || h <= 2 * kBorder) {
+        int w, h;
+        levelSize(gray.width, gray.height, scales_[i], w, h);
+        if (w == 0) {
             pyramid_[i].resize(0, 0);
             continue;
         }
@@ -201,18 +209,27 @@ void OrbExtractor::buildPyramid(const Image& gray) {
     }
 }
 
+OrbGrid orbGrid(int width, int height, int budget) {
+    OrbGrid g;
+    g.x0 = kBorder;
+    g.x1 = width - kBorder;
+    g.y0 = kBorder;
+    g.y1 = height - kBorder;
+    // Roughly one cell per wanted feature, so features spread evenly.
+    const float area = float(g.x1 - g.x0) * float(g.y1 - g.y0);
+    g.cell = std::clamp(static_cast<int>(std::sqrt(area / budget)), 16, 128);
+    g.cols = (g.x1 - g.x0 + g.cell - 1) / g.cell;
+    g.rows = (g.y1 - g.y0 + g.cell - 1) / g.cell;
+    return g;
+}
+
 void OrbExtractor::detectLevel(int level, int budget, std::vector<Corner>& out) {
     const Image& img = pyramid_[level];
     if (img.width <= 2 * kBorder || img.height <= 2 * kBorder || budget <= 0) return;  // too small for any corner
 
-    const int x0 = kBorder, x1 = img.width - kBorder;
-    const int y0 = kBorder, y1 = img.height - kBorder;
-
-    // Grid with roughly one cell per wanted feature, so features spread evenly.
-    const float area = float(x1 - x0) * float(y1 - y0);
-    const int cell = std::clamp(static_cast<int>(std::sqrt(area / budget)), 16, 128);
-    const int cols = (x1 - x0 + cell - 1) / cell;
-    const int rows = (y1 - y0 + cell - 1) / cell;
+    const OrbGrid grid = orbGrid(img.width, img.height, budget);
+    const int x0 = grid.x0, x1 = grid.x1, y0 = grid.y0, y1 = grid.y1;
+    const int cell = grid.cell, cols = grid.cols, rows = grid.rows;
 
     // 1. FAST per cell, retrying with a lower threshold where nothing was found.
     //    Each grid row is one parallel task with its own output list.
@@ -269,24 +286,33 @@ void OrbExtractor::detectLevel(int level, int budget, std::vector<Corner>& out) 
             isLocalMax_[i] = isMax ? 1 : 0;
         }
     });
-    std::vector<std::vector<Corner>> buckets(static_cast<std::size_t>(cols) * rows);
+    std::vector<Corner>& maxima = maxima_;
+    maxima.clear();
     for (int i = 0; i < n; ++i) {
         const Corner& k = candidates_[i];
         scoreMap_[static_cast<std::size_t>(k.y) * img.width + k.x] = 0.0f;
-        if (isLocalMax_[i]) {
-            const int c = (k.x - x0) / cell, r = (k.y - y0) / cell;
-            buckets[static_cast<std::size_t>(r) * cols + c].push_back(k);
-        }
+        if (isLocalMax_[i]) maxima.push_back(k);
     }
 
-    // 3. Weighted round-robin over cells, strongest first, until the level
-    //    budget is filled: after round r a cell has taken up to r * weight
-    //    corners (weight 1 everywhere unless the center is boosted).
+    // 3. Spread the strongest over the grid.
+    distributeOrbCorners(grid, maxima, budget, params_.centerBoost, out);
+}
+
+void distributeOrbCorners(const OrbGrid& grid, const std::vector<OrbCorner>& corners, int budget,
+                          float centerBoost, std::vector<OrbCorner>& out) {
+    const int x0 = grid.x0, x1 = grid.x1, y0 = grid.y0, y1 = grid.y1;
+    const int cell = grid.cell, cols = grid.cols, rows = grid.rows;
+    std::vector<std::vector<OrbCorner>> buckets(static_cast<std::size_t>(cols) * rows);
+    for (const OrbCorner& k : corners) buckets[static_cast<std::size_t>(grid.cellOf(k.x, k.y))].push_back(k);
+
+    // Weighted round-robin over cells, strongest first, until the level
+    // budget is filled: after round r a cell has taken up to r * weight
+    // corners (weight 1 everywhere unless the center is boosted).
     for (auto& b : buckets) {
-        std::sort(b.begin(), b.end(), [](const Corner& a, const Corner& c) { return a.score > c.score; });
+        std::sort(b.begin(), b.end(), [](const OrbCorner& a, const OrbCorner& c) { return a.score > c.score; });
     }
     std::vector<float> weight(buckets.size(), 1.0f);
-    if (params_.centerBoost > 0) {
+    if (centerBoost > 0) {
         const float mx = 0.5f * (x0 + x1), my = 0.5f * (y0 + y1);
         const float halfDiagonal = 0.5f * std::hypot(float(x1 - x0), float(y1 - y0));
         constexpr float kSigma = 0.35f;  // of the half diagonal
@@ -295,7 +321,7 @@ void OrbExtractor::detectLevel(int level, int budget, std::vector<Corner>& out) 
                 const float dx = (x0 + (c + 0.5f) * cell - mx) / halfDiagonal;
                 const float dy = (y0 + (r + 0.5f) * cell - my) / halfDiagonal;
                 weight[static_cast<std::size_t>(r) * cols + c] =
-                    1.0f + params_.centerBoost * std::exp(-(dx * dx + dy * dy) / (2 * kSigma * kSigma));
+                    1.0f + centerBoost * std::exp(-(dx * dx + dy * dy) / (2 * kSigma * kSigma));
             }
         }
     }

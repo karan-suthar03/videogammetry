@@ -3,6 +3,7 @@
 // Building blocks for learning the BRIEF test pattern offline
 // (tools/train_orb_pattern). Not needed by normal pipeline code.
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -15,6 +16,9 @@ namespace vg {
 struct BriefTest {
     std::int8_t x1, y1, x2, y2;
 };
+
+// The 256 tests the descriptor uses (learned by tools/train_orb_pattern).
+const std::array<BriefTest, 256>& learnedBriefPattern();
 
 // Maximum offset radius of a test point; rotated points stay inside the
 // 15 px orientation patch.

@@ -42,8 +42,9 @@ void FeatureExtractor::extract(const FrameView& frame, long index, FrameFeatures
     }
 }
 
-FeaturePipeline::FeaturePipeline(int processSize, const OrbParams& orb, int workers)
-    : processSize_(processSize), orb_(orb) {
+FeaturePipeline::FeaturePipeline(int processSize, const OrbParams& orb, int workers,
+                                 FrameExtractorFactory makeExtractor)
+    : processSize_(processSize), orb_(orb), makeExtractor_(std::move(makeExtractor)) {
     const int n = workers > 0 ? workers : ThreadPool::hardwareThreads();
     maxInFlight_ = static_cast<std::size_t>(n) + 4;  // keep every worker busy, bound memory
     for (int i = 0; i < n; ++i) threads_.emplace_back([this] { work(); });
@@ -90,7 +91,9 @@ void FeaturePipeline::close() {
 }
 
 void FeaturePipeline::work() {
-    FeatureExtractor extractor(processSize_, orb_);  // single-threaded: parallelism is across frames
+    // Single-threaded each: parallelism is across frames.
+    std::unique_ptr<FrameExtractor> extractor =
+        makeExtractor_ ? makeExtractor_() : std::make_unique<FeatureExtractor>(processSize_, orb_);
     while (true) {
         Job* job = nullptr;
         {
@@ -99,7 +102,7 @@ void FeaturePipeline::work() {
             if (stopping_) return;
             job = jobs_.at(nextToStart_++).get();  // stays alive until popped
         }
-        extractor.extract(job->view, job->index, job->features);
+        extractor->extract(job->view, job->index, job->features);
         {
             std::lock_guard<std::mutex> lock(mutex_);
             job->done = true;

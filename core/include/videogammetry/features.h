@@ -3,6 +3,7 @@
 #include <array>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -28,15 +29,26 @@ struct FrameFeatures {
     std::vector<std::array<std::uint8_t, 3>> colors;  // input-frame RGB at each keypoint
 };
 
+// Computes the features of one frame. The CPU implementation is
+// FeatureExtractor; others (e.g. the Vulkan one in gpu/) live outside the core
+// and must produce the same keypoints. Not thread-safe; one per thread.
+class FrameExtractor {
+public:
+    virtual ~FrameExtractor() = default;
+    virtual void extract(const FrameView& frame, long index, FrameFeatures& out) = 0;
+};
+
+using FrameExtractorFactory = std::function<std::unique_ptr<FrameExtractor>()>;
+
 // Gray conversion, downscaling, ORB and color sampling for one frame stream.
 // Not thread-safe; use one per thread.
-class FeatureExtractor {
+class FeatureExtractor final : public FrameExtractor {
 public:
     // processSize: the long side of the frame is downscaled to this many pixels
     // (0 = full resolution), so portrait and landscape are treated alike.
     FeatureExtractor(int processSize, const OrbParams& orb, ThreadPool* pool = nullptr);
 
-    void extract(const FrameView& frame, long index, FrameFeatures& out);
+    void extract(const FrameView& frame, long index, FrameFeatures& out) override;
 
 private:
     int processSize_;
@@ -50,8 +62,10 @@ private:
 // push() copies the frame; pop() blocks until the next frame is ready.
 class FeaturePipeline {
 public:
-    // workers <= 0: all hardware threads.
-    FeaturePipeline(int processSize, const OrbParams& orb, int workers = 0);
+    // workers <= 0: all hardware threads. Each worker gets its own extractor
+    // from `makeExtractor` (default: the CPU FeatureExtractor).
+    FeaturePipeline(int processSize, const OrbParams& orb, int workers = 0,
+                    FrameExtractorFactory makeExtractor = {});
     ~FeaturePipeline();
     FeaturePipeline(const FeaturePipeline&) = delete;
     FeaturePipeline& operator=(const FeaturePipeline&) = delete;
@@ -82,6 +96,7 @@ private:
     std::size_t maxInFlight_;
     int processSize_;
     OrbParams orb_;
+    FrameExtractorFactory makeExtractor_;
 
     std::mutex mutex_;
     std::condition_variable changed_;

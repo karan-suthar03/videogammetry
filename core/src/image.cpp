@@ -38,29 +38,30 @@ void toGray(const FrameView& frame, Image& out, ThreadPool* pool) {
     });
 }
 
+void bilinearTaps(int srcLength, int dstLength, std::vector<int>& first, std::vector<int>& weight) {
+    first.resize(static_cast<std::size_t>(dstLength));
+    weight.resize(static_cast<std::size_t>(dstLength));
+    const float s = static_cast<float>(srcLength) / dstLength;
+    for (int i = 0; i < dstLength; ++i) {
+        float f = (i + 0.5f) * s - 0.5f;
+        f = std::clamp(f, 0.0f, static_cast<float>(srcLength - 1));
+        const int i0 = std::max(std::min(static_cast<int>(f), srcLength - 2), 0);
+        first[i] = i0;
+        weight[i] = static_cast<int>((f - i0) * 256.0f + 0.5f);
+    }
+}
+
 void resizeBilinear(const Image& src, int width, int height, Image& out, ThreadPool* pool) {
     out.resize(width, height);
-    const float sx = static_cast<float>(src.width) / width;
-    const float sy = static_cast<float>(src.height) / height;
-
-    // Precompute horizontal taps once per call.
-    std::vector<int> x0(width);
-    std::vector<int> wx(width);  // weight of x0 + 1, in 1/256 units
-    for (int x = 0; x < width; ++x) {
-        float fx = (x + 0.5f) * sx - 0.5f;
-        fx = std::clamp(fx, 0.0f, static_cast<float>(src.width - 1));
-        int ix = std::min(static_cast<int>(fx), src.width - 2);
-        x0[x] = std::max(ix, 0);
-        wx[x] = static_cast<int>((fx - x0[x]) * 256.0f + 0.5f);
-    }
+    std::vector<int> x0, wx, y0s, wys;
+    bilinearTaps(src.width, width, x0, wx);
+    bilinearTaps(src.height, height, y0s, wys);
 
     parallelFor(pool, 0, height, kRowGrain, [&](int ya, int yb) {
         for (int y = ya; y < yb; ++y) {
-            float fy = (y + 0.5f) * sy - 0.5f;
-            fy = std::clamp(fy, 0.0f, static_cast<float>(src.height - 1));
-            const int y0 = std::max(std::min(static_cast<int>(fy), src.height - 2), 0);
+            const int y0 = y0s[y];
             const int y1 = std::min(y0 + 1, src.height - 1);
-            const int wy = static_cast<int>((fy - y0) * 256.0f + 0.5f);
+            const int wy = wys[y];
 
             const std::uint8_t* r0 = src.row(y0);
             const std::uint8_t* r1 = src.row(y1);

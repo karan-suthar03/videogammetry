@@ -33,6 +33,10 @@ struct Image {
 // Converts any FrameView format to grayscale (BT.601 luma).
 void toGray(const FrameView& frame, Image& out, ThreadPool* pool = nullptr);
 
+// Taps of resizeBilinear along one axis: for each output index, the first
+// of the two source samples and the weight of the second, in 1/256 units.
+void bilinearTaps(int srcLength, int dstLength, std::vector<int>& first, std::vector<int>& weight);
+
 // Bilinear resize to (width, height).
 void resizeBilinear(const Image& src, int width, int height, Image& out, ThreadPool* pool = nullptr);
 

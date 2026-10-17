@@ -38,6 +38,32 @@ struct OrbParams {
     float centerBoost = 0.0f;
 };
 
+// Building blocks shared with other implementations of the same extractor
+// (the Vulkan one in gpu/), so that they choose exactly the same keypoints.
+
+// Keypoints keep this distance from the level border; levels whose width or
+// height is at most twice this hold no keypoints.
+inline constexpr int kOrbBorder = 18;
+
+struct OrbCorner {
+    int x, y;     // level pixels
+    float score;  // Harris response
+};
+
+// Detection grid of one pyramid level: roughly one cell per wanted feature.
+struct OrbGrid {
+    int x0, y0, x1, y1;  // detection area (inside the border), x1/y1 exclusive
+    int cell, cols, rows;
+    int cellOf(int x, int y) const { return ((y - y0) / cell) * cols + (x - x0) / cell; }
+};
+OrbGrid orbGrid(int width, int height, int budget);
+
+// Picks up to `budget` of a level's corners, spread over the grid: weighted
+// round-robin over cells, strongest first. `corners` are the level's 3x3
+// local maxima in detection order (cell row, then cell, then y, then x).
+void distributeOrbCorners(const OrbGrid& grid, const std::vector<OrbCorner>& corners, int budget,
+                          float centerBoost, std::vector<OrbCorner>& out);
+
 // Oriented FAST + rotated BRIEF (Rublee et al., ICCV 2011), with features
 // spread over the image using a per-level grid.
 class OrbExtractor {
@@ -50,16 +76,19 @@ public:
                  std::vector<Descriptor>& descriptors);
 
     const OrbParams& params() const { return params_; }
+    // Per pyramid level: scale relative to level 0 and feature budget.
+    const std::vector<float>& scales() const { return scales_; }
+    const std::vector<int>& budgets() const { return budgets_; }
+    // Size of a level of a width x height input; 0 x 0 if too small to hold
+    // any keypoint (and then so are all coarser levels).
+    static void levelSize(int width, int height, float scale, int& levelWidth, int& levelHeight);
 
     // Smoothed pyramid level from the last extract() call (used for training).
     // A keypoint's level coordinates are (x + 0.5) / scale - 0.5.
     const Image& blurredLevel(int level) const { return blurred_[level]; }
 
 private:
-    struct Corner {
-        int x, y;
-        float score;
-    };
+    using Corner = OrbCorner;
 
     void buildPyramid(const Image& gray);
     void detectLevel(int level, int budget, std::vector<Corner>& out);
@@ -72,6 +101,7 @@ private:
     std::vector<Image> blurred_;
     std::vector<float> scoreMap_;   // reused NMS buffer
     std::vector<Corner> candidates_;
+    std::vector<Corner> maxima_;
     std::vector<std::vector<Corner>> rowCandidates_;
     std::vector<std::uint8_t> isLocalMax_;
 };
