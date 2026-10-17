@@ -139,6 +139,7 @@ struct Node {
     bool fine = false;        // matched at full image size: no children needed
     int triedObservers = 0;   // observer count at the last attempt
     int solvedObservers = 0;  // ... at the last successful solve
+    bool extraTried = false;  // another reference tried while idle
     std::vector<Batch> batches;
     bool hasPoints() const {
         for (const Batch& b : batches)
@@ -533,7 +534,7 @@ int DenseMapper::Impl::chooseNode(bool& newReference) const {
         const Node& n = nodes[i];
         if (n.sparse < params.minSparsePoints || n.observers.size() < 3) continue;
         const int observers = static_cast<int>(n.observers.size());
-        if (observers <= n.triedObservers) continue;  // nothing new since the last attempt
+        const bool fresh = observers > n.triedObservers;  // new observing keyframes since the last attempt
         if (n.level < top) {
             const int parent = findNode(n.level + 1, n.x >> 1, n.y >> 1, n.z >> 1);
             if (parent < 0 || !nodes[parent].solved || nodes[parent].fine) continue;
@@ -541,14 +542,21 @@ int DenseMapper::Impl::chooseNode(bool& newReference) const {
         const double recency = std::exp(-(latest - n.newest) / 15.0);
         double score;
         bool isNew = false;
+        const int added = observers - n.solvedObservers;
+        const double gain = double(added) / std::max(n.solvedObservers, 1);
         if (!n.solved) {
+            if (!fresh) continue;
             score = 3 + 2 * recency + 0.1 * n.level;
-        } else {
-            const int added = observers - n.solvedObservers;
-            const double gain = double(added) / std::max(n.solvedObservers, 1);
-            if (added < 2 || gain < params.resolveGain) continue;
+        } else if (fresh && added >= 2 && gain >= params.resolveGain) {
             score = 1 + recency + 0.5 * std::min(gain, 2.0);
             isNew = static_cast<int>(n.batches.size()) < params.maxReferences;
+        } else if (!n.extraTried && static_cast<int>(n.batches.size()) < params.maxReferences && observers >= 4 &&
+                   n.hasPoints()) {
+            // Idle: the same cell from another reference (what one view cannot see).
+            score = 0.5 + 0.3 * recency;
+            isNew = true;
+        } else {
+            continue;
         }
         if (score > bestScore) {
             bestScore = score;
@@ -570,6 +578,8 @@ void DenseMapper::Impl::solve(int nodeId, bool newReference) {
     const Snapshot& S = *snap;
     Node& n = nodes[nodeId];
     n.triedObservers = static_cast<int>(n.observers.size());
+    n.solved = true;  // even if this attempt fails: its children may still work
+    if (newReference) n.extraTried = true;
 
     const double cell = cellSize(n.level);
     const Vec3 lo{n.x * cell, n.y * cell, n.z * cell};
