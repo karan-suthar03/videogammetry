@@ -282,9 +282,10 @@ void drawHud(HDC dc) {
             line(buf, s.focalUpdates > 0 ? RGB(150, 230, 150) : dim);
         }
         if (s.dense) {
-            swprintf(buf, 512, L"dense: %ld points   %ld map points replaced   %d / %d regions solved   %d solves (last %.0f ms)   %d images",
+            swprintf(buf, 512, L"dense: %ld points   %ld map points replaced   %d / %d regions solved   %d solves (last %.0f ms)   %d images%s",
                      s.denseStats.points, s.denseStats.hiddenSparse, s.denseStats.solvedRegions, s.denseStats.regions, s.denseStats.solves,
-                     s.denseStats.lastSolveMs, s.denseStats.images);
+                     s.denseStats.lastSolveMs, s.denseStats.images,
+                     s.denseStats.idle ? L"   [finished: nothing left to solve]" : L"");
             line(buf, dim);
         }
         if (!s.message.empty()) line(fromUtf8(s.message), RGB(255, 210, 120));

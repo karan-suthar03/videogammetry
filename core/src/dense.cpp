@@ -297,6 +297,7 @@ struct DenseMapper::Impl {
     bool cloudDirty = false;
     Clock::time_point lastPublish{};
     int solves = 0;
+    bool idle = false;
     double lastSolveMs = 0;
 
     // Display: the solve in progress and the recently finished ones.
@@ -455,6 +456,11 @@ void DenseMapper::Impl::run() {
 
         bool newReference = false;
         const int n = snap ? chooseNode(newReference) : -1;
+        if ((n < 0) != idle) {
+            idle = n < 0;
+            std::lock_guard<std::mutex> lock(mutex);
+            stats.idle = idle;
+        }
         if (n >= 0) {
             const Clock::time_point start = Clock::now();
             solve(n, newReference);
@@ -954,9 +960,18 @@ void DenseMapper::Impl::publish() {
     lastPublish = Clock::now();
     auto out = std::make_shared<std::vector<Point>>();
     Stats st;
+    const int topLevel = std::clamp(params.levels, 1, 12) - 1;
     for (const Node& n : nodes) {
-        if (n.sparse >= params.minSparsePoints) ++st.regions;
-        if (n.solved) ++st.solvedRegions;
+        bool needed = n.sparse >= params.minSparsePoints && n.observers.size() >= 3;
+        for (int l = n.level + 1, x = n.x >> 1, y = n.y >> 1, z = n.z >> 1; needed && l <= topLevel;
+             ++l, x >>= 1, y >>= 1, z >>= 1) {
+            const int a = findNode(l, x, y, z);
+            needed = !(a >= 0 && nodes[a].solved && nodes[a].fine);  // matched at full resolution above
+        }
+        if (needed) {
+            ++st.regions;
+            if (n.solved) ++st.solvedRegions;
+        }
         for (const Batch& b : n.batches) {
             const auto it = keyframeOf.find(b.ref);
             if (it == keyframeOf.end()) continue;
@@ -1031,6 +1046,7 @@ void DenseMapper::Impl::publish() {
     st.solves = solves;
     st.images = static_cast<int>(images.size());
     st.lastSolveMs = lastSolveMs;
+    st.idle = idle;
     std::lock_guard<std::mutex> lock(mutex);
     cloud = std::move(out);
     hidden = std::move(hide);

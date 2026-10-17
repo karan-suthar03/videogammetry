@@ -55,8 +55,9 @@ struct DenseParams {
     // solve a reference again with them.
     int maxReferences = 2;
     double resolveGain = 0.5;  // new observing keyframes, relative to those at the last solve
-    // Keyframe images kept at most (the oldest go first).
-    int maxImages = 600;
+    // Keyframe images kept at most (the oldest go first; about 0.4 MB each at
+    // the default size). Regions seen only by dropped ones cannot be solved again.
+    int maxImages = 2000;
 };
 
 // Dense reconstruction in the background: grows a dense colored cloud from
@@ -88,11 +89,12 @@ public:
 
     struct Stats {
         long points = 0;
-        int regions = 0;        // cells with enough map points
+        int regions = 0;        // cells to solve: enough map points and views, not inside a cell solved at full resolution
         int solvedRegions = 0;
         int solves = 0;         // region solves run so far
         int images = 0;
         long hiddenSparse = 0;  // map points it replaces or removes
+        bool idle = false;      // nothing left to solve until new keyframes arrive
         double lastSolveMs = 0;
     };
     // Any thread: the dense cloud with the latest keyframe poses.
