@@ -79,6 +79,10 @@ public:
     // once closed and drained.
     bool pop(FrameFeatures& features, FrameView* frame = nullptr);
 
+    // Takes the pixel buffer of the last popped frame (its view stays valid
+    // as long as the returned vector lives).
+    std::vector<std::uint8_t> takePixels() { return current_ ? std::move(current_->pixels) : std::vector<std::uint8_t>{}; }
+
     int workers() const { return static_cast<int>(threads_.size()); }
 
 private:

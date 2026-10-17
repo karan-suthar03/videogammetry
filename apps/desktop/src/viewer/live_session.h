@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "image_io.h"
+#include "videogammetry/dense.h"
 #include "videogammetry/linalg.h"
 #include "videogammetry/point_cloud.h"
 #include "videogammetry/reconstructor.h"
@@ -33,6 +34,9 @@ struct LiveSnapshot {
     double fovDeg = 0, startFovDeg = 0;  // current estimate (self-calibrated) and the starting guess
     int focalUpdates = 0;
     double k1 = 0;  // radial distortion estimate
+
+    std::shared_ptr<const std::vector<vg::Point>> dense;  // background dense cloud (may be null)
+    vg::DenseMapper::Stats denseStats;
 
     RgbImage thumbnail;  // current video frame with tracked keypoints drawn
 
@@ -59,6 +63,8 @@ public:
         bool realTime = false;  // pace to the video's frame rate (default: as fast as possible)
         int thumbnailSize = 420;  // long side of the video thumbnail, pixels
         bool gpu = true;          // extract features on the GPU when there is one (Vulkan)
+        bool dense = true;        // dense cloud in the background (DenseMapper)
+        vg::DenseParams denseParams;
     };
 
     // `cameraId` set: reads that camera (CameraReader) and `path` is just its
@@ -98,6 +104,7 @@ private:
     std::mutex cameraMutex_;
     CameraReader* camera_ = nullptr;  // while capturing
     std::unique_ptr<vg::Reconstructor> reconstructor_;
+    std::unique_ptr<vg::DenseMapper> dense_;
 
     std::atomic<bool> stop_{false}, endCapture_{false}, paused_{false}, realTime_{false}, done_{false};
     long frame_ = 0, frameCount_ = 0;

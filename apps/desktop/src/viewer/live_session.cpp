@@ -62,6 +62,12 @@ bool LiveSession::savePly(const std::string& path, std::size_t& pointsWritten) c
     if (!done_ || !reconstructor_) return false;
     const vg::PointCloud cloud = reconstructor_->pointCloud();
     pointsWritten = cloud.points.size();
+    if (dense_) {  // the dense cloud next to it: <name>_dense.ply
+        const auto d = dense_->cloud();
+        std::string densePath = path;
+        if (densePath.size() > 4 && densePath.ends_with(".ply")) densePath.resize(densePath.size() - 4);
+        vg::writePly({*d}, densePath + "_dense.ply");
+    }
     return vg::writePly(cloud, path);
 }
 
@@ -92,6 +98,7 @@ void LiveSession::run() {
         frames = std::make_unique<FramePrefetcher>(reader);
     }
     reconstructor_ = std::make_unique<vg::Reconstructor>(settings_.options);
+    if (settings_.dense) dense_ = std::make_unique<vg::DenseMapper>(settings_.denseParams);
 
     // Frames -> parallel feature extraction -> this thread (tracking and
     // mapping, in order), as in the CLI.
@@ -178,6 +185,12 @@ void LiveSession::run() {
             publish(&frame, processingFps, false, {});
             lastPublish = now;
         }
+        if (dense_) {  // after publish: the frame's pixels are handed over
+            if (reconstructor_->lastWasKeyframe()) {
+                dense_->addKeyframeImage(reconstructor_->keyframes().back().frameIndex, pipeline.takePixels(), frame);
+            }
+            dense_->updateMap(*reconstructor_);
+        }
     }
     feeder.join();
     {
@@ -195,6 +208,7 @@ void LiveSession::run() {
         publish(nullptr, processingFps, false, "video done, refining the whole map (global bundle adjustment)...");
     }
     reconstructor_->finish();
+    if (dense_) dense_->updateMap(*reconstructor_, true);
     const vg::Reconstructor::Stats& st = reconstructor_->stats();
     char summary[256];
     if (st.globalBA.ok) {
@@ -268,6 +282,10 @@ void LiveSession::publish(const vg::FrameView* frame, double processingFps, bool
                                   r.processScale() * float(tw) / float(frame->width));
     }
     s->thumbnail = thumbnail_;
+    if (dense_) {
+        s->dense = dense_->cloud();
+        s->denseStats = dense_->stats();
+    }
 
     s->frame = frame_;
     s->frameCount = frameCount_;
