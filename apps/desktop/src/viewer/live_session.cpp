@@ -232,6 +232,18 @@ void LiveSession::run() {
     }
     publish(nullptr, processingFps, true, summary);
     done_ = true;
+
+    // The dense solver keeps refining after the video: keep showing its
+    // progress until the session is closed.
+    int solves = -1;
+    while (dense_ && !stop_) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        const int now = dense_->stats().solves;
+        if (now != solves) {
+            solves = now;
+            publish(nullptr, processingFps, true, summary);
+        }
+    }
 }
 
 void LiveSession::publish(const vg::FrameView* frame, double processingFps, bool finished,
