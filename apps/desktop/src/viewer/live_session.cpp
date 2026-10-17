@@ -1,5 +1,9 @@
 #include "live_session.h"
 
+#ifdef VG_HAS_GPU
+#include "videogammetry/gpu/gpu_orb.h"
+#endif
+
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -67,7 +71,17 @@ void LiveSession::run() {
     // Decode thread -> parallel feature extraction -> this thread (tracking
     // and mapping, in order), as in the CLI.
     FramePrefetcher frames(reader);
-    vg::FeaturePipeline pipeline(settings_.options.processSize, settings_.options.orb);
+    vg::FrameExtractorFactory makeExtractor;
+    int workers = 0;
+    extractor_ = "CPU";
+#ifdef VG_HAS_GPU
+    if (settings_.gpu) {
+        makeExtractor = vg::gpu::makeGpuExtractorFactory(settings_.options.processSize, settings_.options.orb, extractor_);
+        if (makeExtractor) workers = 3;  // overlap upload, GPU and host work
+    }
+#endif
+    vg::FeaturePipeline pipeline(settings_.options.processSize, settings_.options.orb, workers,
+                                 std::move(makeExtractor));
     std::thread feeder([&] {
         vg::FrameView f;
         while (!stop_ && frames.next(f)) pipeline.push(f);
@@ -164,6 +178,7 @@ void LiveSession::publish(const vg::FrameView* frame, double processingFps, bool
     auto s = std::make_shared<LiveSnapshot>();
     s->finished = finished;
     s->message = message;
+    s->extractor = extractor_;
     if (!reconstructor_) {  // the video could not be opened
         std::lock_guard<std::mutex> lock(mutex_);
         s->version = ++version_;

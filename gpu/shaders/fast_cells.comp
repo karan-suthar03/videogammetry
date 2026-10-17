@@ -1,0 +1,22 @@
+#version 450
+// Marks the grid cells of a level where the main FAST threshold finds a
+// corner; elsewhere fast_collect uses the lower retry threshold (as
+// OrbExtractor::detectLevel does per cell). One invocation per pixel of the
+// detection area.
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 16, local_size_y = 16) in;
+#include "common.glsl"
+#include "fast.glsl"
+
+layout(push_constant) uniform P { int lv; } pc;
+
+void main() {
+    const int x = level(pc.lv, kLvX0) + int(gl_GlobalInvocationID.x);
+    const int y = level(pc.lv, kLvY0) + int(gl_GlobalInvocationID.y);
+    if (x >= level(pc.lv, kLvX1) || y >= level(pc.lv, kLvY1)) return;
+    const int off = level(pc.lv, kLvImage), stride = level(pc.lv, kLvStride);
+    if (!isFastCorner(off, stride, x, y, level(pc.lv, kLvThreshold))) return;
+    const int cell = level(pc.lv, kLvCell);
+    const int c = ((y - level(pc.lv, kLvY0)) / cell) * level(pc.lv, kLvCols) + (x - level(pc.lv, kLvX0)) / cell;
+    atomicOr(cellHasMain[level(pc.lv, kLvCells) + c], 1u);
+}

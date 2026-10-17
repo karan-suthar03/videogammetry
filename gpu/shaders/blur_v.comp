@@ -1,0 +1,25 @@
+#version 450
+// Vertical pass of vg::gaussianBlur7 from Temp back to an 8-bit image. One
+// invocation per output word.
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 64) in;
+#include "common.glsl"
+
+layout(push_constant) uniform P { int offset, stride, width, height; } pc;
+
+const uint k[7] = uint[7](18u, 34u, 49u, 54u, 49u, 34u, 18u);
+
+void main() {
+    const int word = int(gl_GlobalInvocationID.x);
+    const int y = word / pc.stride, wx = word % pc.stride;
+    if (y >= pc.height) return;
+    uint packed = 0u;
+    for (int i = 0; i < 4; ++i) {
+        const int x = wx * 4 + i;
+        if (x >= pc.width) break;
+        uint sum = 0u;
+        for (int t = 0; t < 7; ++t) sum += k[t] * tmp[clamp(y + t - 3, 0, pc.height - 1) * pc.width + x];
+        packed |= ((sum + (1u << 15)) >> 16) << (8 * i);
+    }
+    img[uint(pc.offset) + uint(word)] = packed;
+}

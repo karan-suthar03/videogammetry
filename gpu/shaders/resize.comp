@@ -1,0 +1,34 @@
+#version 450
+// Bilinear resize exactly as vg::resizeBilinear; the taps (vg::bilinearTaps)
+// are in the params table: tapsX[2 * x] = first source column, [2 * x + 1] =
+// weight of the next one (1/256). One invocation per output word.
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 64) in;
+#include "common.glsl"
+
+layout(push_constant) uniform P {
+    int srcOffset, srcStride, srcWidth, srcHeight;
+    int dstOffset, dstStride, dstWidth, dstHeight;
+    int tapsX, tapsY;
+} pc;
+
+void main() {
+    const int word = int(gl_GlobalInvocationID.x);
+    const int y = word / pc.dstStride, wx = word % pc.dstStride;
+    if (y >= pc.dstHeight) return;
+    const int y0 = params[pc.tapsY + 2 * y];
+    const int y1 = min(y0 + 1, pc.srcHeight - 1);
+    const int wy = params[pc.tapsY + 2 * y + 1];
+    uint packed = 0u;
+    for (int i = 0; i < 4; ++i) {
+        const int x = wx * 4 + i;
+        if (x >= pc.dstWidth) break;
+        const int a = params[pc.tapsX + 2 * x];
+        const int b = min(a + 1, pc.srcWidth - 1);
+        const int w = params[pc.tapsX + 2 * x + 1];
+        const int top = pixelAt(pc.srcOffset, pc.srcStride, a, y0) * (256 - w) + pixelAt(pc.srcOffset, pc.srcStride, b, y0) * w;
+        const int bot = pixelAt(pc.srcOffset, pc.srcStride, a, y1) * (256 - w) + pixelAt(pc.srcOffset, pc.srcStride, b, y1) * w;
+        packed |= uint((top * (256 - wy) + bot * wy + (1 << 15)) >> 16) << (8 * i);
+    }
+    img[uint(pc.dstOffset) + uint(word)] = packed;
+}

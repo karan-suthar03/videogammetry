@@ -18,6 +18,7 @@ std::vector<SettingEntry> settingEntries(ViewerSettings& s) {
         {"Playback", "pointSize", "Point size", "px, 1..100", &s.render.pointSize, 1, 100, 1},
         {"Playback", "highlightTracked", "Highlight tracked points", "", &s.render.highlightTracked, 0, 1, 1},
         {"Playback", "showKeyframes", "Show keyframes", "", &s.render.showKeyframes, 0, 1, 1},
+        {"Processing", "gpu", "Extract features on the GPU", "Vulkan; CPU if none", &s.session.gpu, 0, 1, 1},
     };
     // clang-format on
     const std::vector<SettingEntry> options = optionEntries(s.session.options);

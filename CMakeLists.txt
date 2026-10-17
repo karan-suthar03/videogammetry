@@ -12,12 +12,18 @@ option(VG_BUILD_TESTS "Build unit tests" ON)
 # Self-contained Windows exes: the MSVC runtime and FFmpeg linked in statically,
 # so the exe runs on its own with no DLLs next to it (see cmake/FFmpeg.cmake).
 option(VG_STATIC "Link the C++ runtime and FFmpeg statically (Windows)" OFF)
+# GPU backend (Vulkan compute, loaded at run time; CPU fallback without a GPU).
+option(VG_GPU "Build the Vulkan GPU backend" ON)
 
 if(VG_STATIC AND MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 add_subdirectory(core)
+
+if(VG_GPU)
+    add_subdirectory(gpu)
+endif()
 
 if(VG_BUILD_DESKTOP AND NOT ANDROID)
     include(cmake/FFmpeg.cmake)  # defines FFmpeg::FFmpeg and FFMPEG_DLLS for the apps and tools

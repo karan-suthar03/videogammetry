@@ -1,0 +1,48 @@
+#version 450
+// Appends a level's FAST candidates (main threshold, or the retry threshold
+// in cells where the main one found nothing) with their Harris response, and
+// writes the response into the level's score map for non-maximum suppression.
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 16, local_size_y = 16) in;
+#include "common.glsl"
+#include "fast.glsl"
+
+layout(push_constant) uniform P { int lv; } pc;
+
+// vg::harrisResponse. The sums are exact integers in float; `precise` keeps
+// the final expression from being fused, so it rounds exactly like the CPU.
+float harrisResponse(int off, int stride, int x, int y) {
+    precise float a = 0.0, b = 0.0, c = 0.0;
+    for (int dy = -3; dy <= 3; ++dy) {
+        for (int dx = -3; dx <= 3; ++dx) {
+            precise float ix = float(pixelAt(off, stride, x + dx + 1, y + dy)) - float(pixelAt(off, stride, x + dx - 1, y + dy));
+            precise float iy = float(pixelAt(off, stride, x + dx, y + dy + 1)) - float(pixelAt(off, stride, x + dx, y + dy - 1));
+            a += ix * ix;
+            b += iy * iy;
+            c += ix * iy;
+        }
+    }
+    const float k = 0.04;
+    precise float r = a * b - c * c - k * (a + b) * (a + b);
+    return r;
+}
+
+void main() {
+    const int x = level(pc.lv, kLvX0) + int(gl_GlobalInvocationID.x);
+    const int y = level(pc.lv, kLvY0) + int(gl_GlobalInvocationID.y);
+    if (x >= level(pc.lv, kLvX1) || y >= level(pc.lv, kLvY1)) return;
+    const int off = level(pc.lv, kLvImage), stride = level(pc.lv, kLvStride);
+    const int cell = level(pc.lv, kLvCell);
+    const int c = ((y - level(pc.lv, kLvY0)) / cell) * level(pc.lv, kLvCols) + (x - level(pc.lv, kLvX0)) / cell;
+    const bool cellMain = cellHasMain[level(pc.lv, kLvCells) + c] != 0u;
+    const int t = cellMain ? level(pc.lv, kLvThreshold) : level(pc.lv, kLvMinThreshold);
+    if (!isFastCorner(off, stride, x, y, t)) return;
+
+    const float score = harrisResponse(off, stride, x, y);
+    scoreMap[level(pc.lv, kLvScore) + y * level(pc.lv, kLvWidth) + x] = score;
+    const uint i = atomicAdd(res[kResCandidates], 1u);
+    if (i >= uint(params[kParamCandidateCapacity])) return;  // overflow: the host retries with more room
+    cand[3u * i] = uint(x) | (uint(y) << 16);
+    cand[3u * i + 1u] = uint(pc.lv);
+    cand[3u * i + 2u] = floatBitsToUint(score);
+}

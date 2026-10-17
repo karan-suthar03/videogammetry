@@ -1,0 +1,19 @@
+#version 450
+// Horizontal pass of vg::gaussianBlur7 (clamped borders) into Temp, one
+// 16-bit sum per pixel. One invocation per pixel.
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 64) in;
+#include "common.glsl"
+
+layout(push_constant) uniform P { int offset, stride, width, height; } pc;
+
+const int k[7] = int[7](18, 34, 49, 54, 49, 34, 18);
+
+void main() {
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= pc.width * pc.height) return;
+    const int y = i / pc.width, x = i % pc.width;
+    int sum = 0;
+    for (int t = 0; t < 7; ++t) sum += k[t] * pixelAt(pc.offset, pc.stride, clamp(x + t - 3, 0, pc.width - 1), y);
+    tmp[i] = uint(sum);
+}

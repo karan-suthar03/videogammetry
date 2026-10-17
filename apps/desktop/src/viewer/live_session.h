@@ -40,6 +40,7 @@ struct LiveSnapshot {
     int trackedCount = 0;
     int maps = 0;
     double processingFps = 0.0;
+    std::string extractor;  // where features are extracted, e.g. "GPU (device name, Vulkan)"
     bool finished = false;  // global bundle adjustment done
     std::string message;    // error or summary line
 };
@@ -54,6 +55,7 @@ public:
         vg::Reconstructor::Options options;
         bool realTime = false;  // pace to the video's frame rate (default: as fast as possible)
         int thumbnailSize = 420;  // long side of the video thumbnail, pixels
+        bool gpu = true;          // extract features on the GPU when there is one (Vulkan)
     };
 
     LiveSession(std::string path, Settings settings);
@@ -92,6 +94,7 @@ private:
     std::shared_ptr<const LiveSnapshot> snapshot_;
     long version_ = 0;
     RgbImage thumbnail_;  // last frame's, kept for snapshots after the video ends
+    std::string extractor_;
 
     std::thread thread_;
 };

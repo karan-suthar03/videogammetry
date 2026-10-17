@@ -1,0 +1,76 @@
+#version 450
+// For every candidate that is a 3x3 local maximum of its level's score map
+// (same rule and tie-break as OrbExtractor::detectLevel): the intensity
+// centroid moments (orientation) and the rotated BRIEF descriptor on the
+// blurred level. Results go to the host; it picks the keypoints.
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 64) in;
+#include "common.glsl"
+
+layout(push_constant) uniform P { int unused; } pc;
+
+const int kPatchRadius = 15;
+// floor(sqrt(15^2 - v^2)) for v = 0..15 (patchRowExtent in orb.cpp); a table,
+// because GPU square roots are not exactly rounded.
+const int kExtent[16] = int[16](15, 14, 14, 14, 14, 14, 13, 13, 12, 12, 11, 10, 9, 7, 5, 0);
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= min(res[kResCandidates], uint(params[kParamCandidateCapacity]))) return;
+    const int x = int(cand[3u * i] & 0xFFFFu), y = int(cand[3u * i] >> 16);
+    const int lv = int(cand[3u * i + 1u]);
+    const float score = uintBitsToFloat(cand[3u * i + 2u]);
+
+    // Non-maximum suppression: a neighbour wins if it scores higher, or the
+    // same and comes first in raster order.
+    const int w = level(lv, kLvWidth), so = level(lv, kLvScore);
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            if (dx == 0 && dy == 0) continue;
+            const float s = scoreMap[so + (y + dy) * w + x + dx];
+            if (s != 0.0 && (s > score || (s == score && (dy < 0 || (dy == 0 && dx < 0))))) return;
+        }
+    }
+
+    // Intensity centroid over the circular patch (exact integers).
+    const int off = level(lv, kLvImage), stride = level(lv, kLvStride);
+    int m01 = 0, m10 = 0;
+    for (int u = -kPatchRadius; u <= kPatchRadius; ++u) m10 += u * pixelAt(off, stride, x + u, y);
+    for (int v = 1; v <= kPatchRadius; ++v) {
+        int vSum = 0;
+        for (int u = -kExtent[v]; u <= kExtent[v]; ++u) {
+            const int b = pixelAt(off, stride, x + u, y + v), a = pixelAt(off, stride, x + u, y - v);
+            vSum += b - a;
+            m10 += u * (b + a);
+        }
+        m01 += v * vSum;
+    }
+
+    // Rotated BRIEF on the blurred level (vg::evaluateBriefTest).
+    const float angle = (m01 == 0 && m10 == 0) ? 0.0 : atan(float(m01), float(m10));
+    const float ca = cos(angle), sa = sin(angle);
+    const int bo = level(lv, kLvBlurred);
+    uint desc[8] = uint[8](0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u);
+    for (int t = 0; t < 256; ++t) {
+        const int packed = params[params[kParamPattern] + t];
+        const float x1 = float(bitfieldExtract(packed, 0, 8)), y1 = float(bitfieldExtract(packed, 8, 8));
+        const float x2 = float(bitfieldExtract(packed, 16, 8)), y2 = float(bitfieldExtract(packed, 24, 8));
+        precise float r1x = ca * x1 - sa * y1;
+        precise float r1y = sa * x1 + ca * y1;
+        precise float r2x = ca * x2 - sa * y2;
+        precise float r2y = sa * x2 + ca * y2;
+        const int p1 = pixelAt(bo, stride, x + int(r1x + (r1x >= 0.0 ? 0.5 : -0.5)), y + int(r1y + (r1y >= 0.0 ? 0.5 : -0.5)));
+        const int p2 = pixelAt(bo, stride, x + int(r2x + (r2x >= 0.0 ? 0.5 : -0.5)), y + int(r2y + (r2y >= 0.0 ? 0.5 : -0.5)));
+        if (p1 < p2) desc[t >> 5] |= 1u << (t & 31);
+    }
+
+    const uint m = atomicAdd(res[kResMaxima], 1u);
+    if (m >= uint(params[kParamMaximaCapacity])) return;  // overflow: the host retries with more room
+    const uint r = kResHeader + m * kRecordWords;
+    res[r] = uint(x) | (uint(y) << 16);
+    res[r + 1u] = uint(lv);
+    res[r + 2u] = floatBitsToUint(score);
+    res[r + 3u] = uint(m01);
+    res[r + 4u] = uint(m10);
+    for (int k = 0; k < 8; ++k) res[r + 6u + uint(k)] = desc[k];
+}

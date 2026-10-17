@@ -1,0 +1,28 @@
+#version 450
+// Frame (RGB8 / RGBA8 / Gray8, tightly packed rows) -> 8-bit gray, BT.601
+// luma exactly as vg::toGray. One invocation per output word (4 pixels).
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x = 64) in;
+#include "common.glsl"
+
+layout(push_constant) uniform P { int width, height, bytesPerPixel, dstOffset, dstStride; } pc;
+
+void main() {
+    const int word = int(gl_GlobalInvocationID.x);
+    const int y = word / pc.dstStride, wx = word % pc.dstStride;
+    if (y >= pc.height) return;
+    uint packed = 0u;
+    for (int i = 0; i < 4; ++i) {
+        const int x = wx * 4 + i;
+        if (x >= pc.width) break;
+        const uint p = uint(y * pc.width + x) * uint(pc.bytesPerPixel);
+        int g;
+        if (pc.bytesPerPixel == 1) {
+            g = frameByte(p);
+        } else {
+            g = (77 * frameByte(p) + 150 * frameByte(p + 1u) + 29 * frameByte(p + 2u) + 128) >> 8;
+        }
+        packed |= uint(g) << (8 * i);
+    }
+    img[uint(pc.dstOffset) + uint(word)] = packed;
+}

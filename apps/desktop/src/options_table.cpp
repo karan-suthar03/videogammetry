@@ -102,6 +102,13 @@ const char* settingDetails(const char* key) {
          "Draws a small blue camera frustum at every keyframe (the frames the map is built from). Turning it off "
          "uncovers the points behind dense camera paths. K while playing."},
 
+        {"gpu",
+         "Runs feature extraction (gray conversion, pyramid, FAST, Harris, orientation, descriptors) on the "
+         "graphics card through Vulkan, which frees every CPU core for tracking and mapping: about twice the "
+         "throughput at default settings on an RTX 3060 laptop. It picks exactly the same keypoints as the CPU; "
+         "about one descriptor bit in three million differs (GPU sine/cosine rounding). Without a usable GPU, or "
+         "for absurd pyramid settings, it falls back to the CPU; the status line shows which one is used."},
+
         {"processSize",
          "Frames are shrunk so that their long side is at most this many pixels before features are extracted; 0 "
          "uses the full resolution. Smaller is much faster (cost grows with the pixel count) but sees less detail "

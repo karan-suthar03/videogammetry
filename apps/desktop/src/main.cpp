@@ -19,6 +19,9 @@
 #include "videogammetry/map_quality.h"
 #include "videogammetry/reconstructor.h"
 #include "videogammetry/version.h"
+#ifdef VG_HAS_GPU
+#include "videogammetry/gpu/gpu_orb.h"
+#endif
 
 namespace {
 
@@ -36,6 +39,7 @@ void printUsage() {
         "  --threads <n>               worker threads for tracking/mapping, 0 = all hardware threads (default 0)\n"
         "  --extract-workers <n>       frames whose features are extracted in parallel, 0 = all hardware threads\n"
         "  --serial                    extract features inside the reconstructor, one frame at a time\n"
+        "  --gpu                       extract features on the GPU (Vulkan; falls back to the CPU)\n"
         "  --center-boost <x>          extra share of features for the middle of the image, 0 = even (default 0)\n"
         "  --confirm <n>               keyframes that must see a new point to keep it, 2 = no culling (default 3)\n"
         "  --fixed-focal               keep the --fov focal length (no self-calibration)\n"
@@ -86,6 +90,7 @@ int main(int argc, char** argv) {
     std::string dumpDir;
     long dumpEvery = 25;
     bool serial = false;
+    bool gpu = false;
     int extractWorkers = 0;
 
     for (int i = 1; i < argc; ++i) {
@@ -110,6 +115,8 @@ int main(int argc, char** argv) {
             options.processSize = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--threads") == 0 && i + 1 < argc) {
             options.threads = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
+        } else if (std::strcmp(argv[i], "--gpu") == 0) {
+            gpu = true;
         } else if (std::strcmp(argv[i], "--serial") == 0) {
             serial = true;
         } else if (std::strcmp(argv[i], "--extract-workers") == 0 && i + 1 < argc) {
@@ -205,8 +212,19 @@ int main(int argc, char** argv) {
     std::unique_ptr<vg::FeaturePipeline> pipeline;
     std::thread feeder;
     if (!serial) {
-        pipeline = std::make_unique<vg::FeaturePipeline>(options.processSize, options.orb, extractWorkers);
-        std::printf("extract: %d frames in parallel\n", pipeline->workers());
+        vg::FrameExtractorFactory makeExtractor;
+        std::string extractorName = "CPU";
+        if (gpu) {
+#ifdef VG_HAS_GPU
+            makeExtractor = vg::gpu::makeGpuExtractorFactory(options.processSize, options.orb, extractorName);
+            if (makeExtractor && extractWorkers <= 0) extractWorkers = 3;  // overlap upload, GPU and host work
+#else
+            extractorName = "CPU (built without the GPU backend)";
+#endif
+        }
+        pipeline = std::make_unique<vg::FeaturePipeline>(options.processSize, options.orb, extractWorkers,
+                                                         std::move(makeExtractor));
+        std::printf("extract: %d frames in parallel on %s\n", pipeline->workers(), extractorName.c_str());
         feeder = std::thread([&] {
             vg::FrameView f;
             while (frames.next(f)) pipeline->push(f);

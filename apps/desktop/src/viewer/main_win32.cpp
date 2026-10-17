@@ -250,7 +250,8 @@ void drawHud(HDC dc) {
         line(buf, white);
         const wchar_t* playback = g.session->paused() ? L"PAUSED" : (g.session->realTime() ? L"real-time" : L"max speed");
         if (s.finished) playback = L"finished";
-        swprintf(buf, 512, L"tracking + mapping: %.0f fps   playback: %s", s.processingFps, playback);
+        swprintf(buf, 512, L"tracking + mapping: %.0f fps   playback: %s   features: %s", s.processingFps, playback,
+                 fromUtf8(s.extractor).c_str());
         line(buf, dim);
         if (s.fovDeg > 0) {
             if (s.focalUpdates > 0) {

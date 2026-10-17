@@ -10,7 +10,7 @@ Take a video as input and produce a **3D point cloud** of the filmed scene. The 
 ## 2. Guiding principles
 - **Progressive:** fastest/simplest working version first (sparse), then advance (denser, faster, real-time).
 - **Mostly our own code.** Use existing libraries only for low-level building blocks; COLMAP and ORB-SLAM3 serve as **reference code and benchmarks**, not as the pipeline.
-- **Very cross-platform:** Windows, Linux, macOS. **CPU only for now. No CUDA, no GPU dependency.**
+- **Very cross-platform:** Windows, Linux, macOS. **The CPU path is complete and the reference; the GPU is optional** (Vulkan compute, decided 2026-10-17: runs on NVIDIA/AMD/Intel and Android, no CUDA). Every GPU stage falls back to the CPU and is checked against it.
 - **Offline first, real-time later:** build and test offline on recorded video, then turn the same core into a real-time system.
 
 ## 3. Input
@@ -85,7 +85,7 @@ CMakePresets.json      presets: windows (MSVC), linux (Ninja)
 
 ## 8. Tech constraints
 - **OS:** cross-platform (developed on Windows 11)
-- **GPU:** none. CPU only for now (machine has NVIDIA, intentionally unused)
+- **GPU:** optional Vulkan compute backend (`gpu/`, `VG_GPU=ON` by default). Vulkan is loaded at run time (volk), so the apps still start without a driver; headers, volk and the glslang shader compiler are fetched by CMake (`cmake/Vulkan.cmake`, pinned, ~17 MB once), no Vulkan SDK needed. Done: feature extraction (`--gpu` in the CLI, a menu setting in the viewer; identical keypoints, ~1 descriptor bit in 3 million differs; `tools/gpu_check` verifies). Next: mapping on its own thread, then local BA and the triangulation/fusion searches on the GPU
 - **Language:** C++20 core; Java (JNI) shim on Android
 - **References:** `references/colmap`, `references/ORB_SLAM3`
 - **Allowed libraries (candidates):** <!-- e.g. OpenCV (video I/O, features, geometry), Eigen (math), Ceres (bundle adjustment) -->
@@ -100,7 +100,7 @@ CMakePresets.json      presets: windows (MSVC), linux (Ninja)
 
 **Out of scope:**
 - Meshing, texturing, Gaussian splatting, NeRF
-- CUDA / GPU acceleration (for now)
+- CUDA (the GPU backend is Vulkan, so it also runs on AMD/Intel and Android)
 
 ## 10. Success criteria
 - **Phase 1:** a 30s phone video gives a recognizable sparse cloud; poses close to COLMAP's; runtime well under COLMAP's
