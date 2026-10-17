@@ -32,6 +32,7 @@ std::vector<SettingEntry> optionEntries(vg::Reconstructor::Options& o) {
 
         {"Initialization", "minInitParallaxDeg", "Min parallax", "deg", &m.minInitParallaxDeg, 0, 180, 0.25},
         {"Initialization", "minInitialPoints", "Min initial points", "", &m.minInitialPoints, 0, kInf, 10},
+        {"Initialization", "initFeatures", "Features for the initial match", "0 = all", &m.initFeatures, 0, kInf, 250},
         {"Initialization", "maxReferenceAge", "Max reference age", "frames", &m.maxReferenceAge, 1, kInf, 5},
         {"Initialization", "twoViewThreshold", "Two-view inlier threshold", "px", &o.twoView.inlierThresholdPx, 0, kInf, 0.25},
         {"Initialization", "twoViewIterations", "Two-view RANSAC iterations", "", &o.twoView.maxIterations, 1, kInf, 100},
@@ -163,6 +164,13 @@ const char* settingDetails(const char* key) {
         {"minInitialPoints",
          "Minimum number of points the two-view initialization must triangulate before a map is started. Lower "
          "starts sooner (risking a weak first map); higher waits for a well-textured, well-moved pair."},
+        {"initFeatures",
+         "Before there is a map the camera motion is unknown, so the two initialization frames are matched by "
+         "comparing every feature with every other one: the cost grows with the square of the feature count "
+         "(about 7 ms per attempt at 2000 features, 670 ms at 30000, repeated every frame until the map starts). "
+         "Only this many of each frame's strongest features, spread over the image, take part; the first "
+         "keyframes still keep all their features, so the map is not smaller. The default is enough for the "
+         "100-150 points initialization needs; 0 uses every feature (old behaviour)."},
         {"maxReferenceAge",
          "During initialization, the first frame of the pair is replaced after this many frames without a "
          "successful start (or when too few of its features are still matched). Small values keep trying fresh "

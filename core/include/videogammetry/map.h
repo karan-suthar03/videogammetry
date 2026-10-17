@@ -40,6 +40,12 @@ struct MappingParams {
     double minInitParallaxDeg = 1.0;
     int minInitialPoints = 100;
     int maxReferenceAge = 60;  // frames before the initialization reference is replaced
+    // The two initialization frames are matched by comparing every feature
+    // with every feature (the motion is unknown), which grows with the square
+    // of the feature count; only the `initFeatures` strongest of each frame,
+    // spread over the image, take part (0 = all). The first keyframes keep
+    // all their features.
+    int initFeatures = 2000;
 
     // Tracking against the map (any motion: uses 2D-3D matches, no parallax needed).
     // The local map is chosen by covisibility (keyframes sharing points), not

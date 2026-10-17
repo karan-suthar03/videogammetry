@@ -130,9 +130,16 @@ private:
         std::vector<Vec2> rawPositions;
         std::vector<Descriptor> descriptors;
         std::vector<std::array<std::uint8_t, 3>> colors;
+        // Features used for the initial match (MappingParams::initFeatures),
+        // as indices into the above, and their keypoints / descriptors.
+        std::vector<int> initIndex;
+        std::vector<Keypoint> initKeypoints;
+        std::vector<Descriptor> initDescriptors;
     };
 
     void tryInitialize();
+    // Fills frame.initIndex / initKeypoints / initDescriptors.
+    void selectInitFeatures(FrameData& frame) const;
     bool track();
     void addKeyframe();
     int searchByProjection(const Pose& pose, float radius, const std::vector<int>& localPoints,

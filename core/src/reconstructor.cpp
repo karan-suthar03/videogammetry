@@ -126,6 +126,7 @@ void Reconstructor::tryInitialize() {
     current.rawPositions = rawPositions_;
     current.descriptors = descriptors_;
     current.colors = colors_;
+    selectInitFeatures(current);
 
     if (reference_.index < 0 || static_cast<int>(reference_.keypoints.size()) < mp.minInitialPoints) {
         reference_ = std::move(current);
@@ -133,17 +134,22 @@ void Reconstructor::tryInitialize() {
     }
 
     // Match against the reference over the whole image: the motion between
-    // the two frames is unknown and may be large.
+    // the two frames is unknown and may be large. Only the selected features
+    // take part; matches are mapped back to the full feature lists.
     MatchParams matchParams = options_.match;
     matchParams.searchRadius = 0;
     std::vector<Match> matches;
-    matchFeatures(current.keypoints, current.descriptors, reference_.keypoints, reference_.descriptors,
-                  matchParams, matches, nullptr, pool_.get());
+    matchFeatures(current.initKeypoints, current.initDescriptors, reference_.initKeypoints,
+                  reference_.initDescriptors, matchParams, matches, nullptr, pool_.get());
+    for (Match& m : matches) {
+        m.query = current.initIndex[m.query];
+        m.train = reference_.initIndex[m.train];
+    }
 
     const long age = current.index - reference_.index;
     if (static_cast<int>(matches.size()) < mp.minInitialPoints || age > mp.maxReferenceAge) {
         // The view has moved on (or too much time passed): start over from here.
-        if (matches.size() < 0.3 * reference_.keypoints.size() || age > mp.maxReferenceAge) {
+        if (matches.size() < 0.3 * reference_.initKeypoints.size() || age > mp.maxReferenceAge) {
             reference_ = std::move(current);
         }
         return;
@@ -225,6 +231,52 @@ void Reconstructor::tryInitialize() {
     state_ = State::Tracking;
     lostCount_ = 0;
     ++stats_.maps;
+}
+
+void Reconstructor::selectInitFeatures(FrameData& frame) const {
+    const int n = static_cast<int>(frame.keypoints.size());
+    const int cap = options_.mapping.initFeatures;
+    frame.initIndex.clear();
+    if (cap <= 0 || n <= cap) {
+        // All of them, in their own order (the result is then exactly as
+        // without a cap).
+        frame.initIndex.resize(static_cast<std::size_t>(n));
+        for (int i = 0; i < n; ++i) frame.initIndex[i] = i;
+    } else {
+        // Strongest first in each cell of a grid of about cap / 8 cells,
+        // taken round-robin over the cells, so the selection covers the image.
+        const int side = std::max(1, static_cast<int>(std::lround(std::sqrt(cap / 8.0))));
+        const float w = static_cast<float>(std::max(1, imageWidth_)), h = static_cast<float>(std::max(1, imageHeight_));
+        std::vector<std::vector<int>> cells(static_cast<std::size_t>(side) * side);
+        for (int i = 0; i < n; ++i) {
+            const Keypoint& k = frame.keypoints[i];
+            const int cx = std::clamp(static_cast<int>(k.x / w * side), 0, side - 1);
+            const int cy = std::clamp(static_cast<int>(k.y / h * side), 0, side - 1);
+            cells[static_cast<std::size_t>(cy) * side + cx].push_back(i);
+        }
+        for (std::vector<int>& c : cells) {
+            std::stable_sort(c.begin(), c.end(), [&](int a, int b) {
+                return frame.keypoints[a].response > frame.keypoints[b].response;
+            });
+        }
+        for (std::size_t round = 0; static_cast<int>(frame.initIndex.size()) < cap; ++round) {
+            bool any = false;
+            for (const std::vector<int>& c : cells) {
+                if (round >= c.size()) continue;
+                any = true;
+                frame.initIndex.push_back(c[round]);
+                if (static_cast<int>(frame.initIndex.size()) >= cap) break;
+            }
+            if (!any) break;
+        }
+        std::sort(frame.initIndex.begin(), frame.initIndex.end());  // keep the frame's own order
+    }
+    frame.initKeypoints.resize(frame.initIndex.size());
+    frame.initDescriptors.resize(frame.initIndex.size());
+    for (std::size_t j = 0; j < frame.initIndex.size(); ++j) {
+        frame.initKeypoints[j] = frame.keypoints[frame.initIndex[j]];
+        frame.initDescriptors[j] = frame.descriptors[frame.initIndex[j]];
+    }
 }
 
 std::vector<std::pair<int, int>> Reconstructor::covisibleKeyframes(int k) const {
