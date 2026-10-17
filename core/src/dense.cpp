@@ -29,6 +29,22 @@ constexpr int kPatchSpacing = 2;                   // pixels between samples
 constexpr int kPatchRadius = (kPatch / 2) * kPatchSpacing;
 constexpr int kPatchSize = kPatch * kPatch;
 
+// Quality tiers: a cell starts at 0 (fast) and climbs while the solver is idle.
+struct Tier {
+    int step;        // pixels between solved pixels
+    int depths;      // plane sweep samples
+    int neighbours;  // views matched against the reference
+    int fineSteps;   // finer search around the best sample
+    int references;  // reference cameras per cell
+    int regionScale; // times DenseParams::maxRegionPx (finer image levels)
+};
+constexpr Tier kTiers[] = {
+    {4, 16, 3, 4, 1, 1}, {2, 24, 4, 6, 1, 1}, {2, 32, 5, 8, 2, 1},
+    {1, 48, 6, 8, 2, 2}, {1, 64, 8, 12, 3, 2}, {1, 96, 12, 16, 4, 2},
+};
+constexpr int kMaxTier = static_cast<int>(sizeof(kTiers) / sizeof(kTiers[0])) - 1;
+enum Mode { kFirst, kNewViews, kUpgrade, kRotate };
+
 // A keyframe image kept for matching: gray pyramid and color at half size.
 struct KeyImage {
     Image gray[kPyramid];
@@ -124,6 +140,8 @@ struct DensePoint {
 
 struct Batch {
     long ref = 0;  // keyframe frame index
+    int tier = 0;
+    Clock::time_point at;
     std::vector<DensePoint> points;
 };
 
@@ -139,7 +157,9 @@ struct Node {
     bool fine = false;        // matched at full image size: no children needed
     int triedObservers = 0;   // observer count at the last attempt
     int solvedObservers = 0;  // ... at the last successful solve
-    bool extraTried = false;  // another reference tried while idle
+    int tier = -1;            // quality tier of the last solve
+    std::vector<long> refsUsed;  // reference cameras tried at the top tier
+    bool exhausted = false;   // every camera seeing it has been a reference
     std::vector<Batch> batches;
     bool hasPoints() const {
         for (const Batch& b : batches)
@@ -338,8 +358,8 @@ struct DenseMapper::Impl {
 
     void run();
     void takeSnapshot(std::shared_ptr<const Snapshot> s);
-    int chooseNode(bool& newReference) const;
-    void solve(int nodeId, bool newReference);
+    int chooseNode(int& mode) const;
+    void solve(int nodeId, int mode);
     void publish();
     Vec3 worldPoint(const DensePoint& p, const Pose& refPose) const;
 };
@@ -454,8 +474,8 @@ void DenseMapper::Impl::run() {
                                  : (params.threads > 0 ? params.threads : std::max(1, ThreadPool::hardwareThreads() / 2));
         if ((pool ? pool->size() : 1) != threads) pool = threads > 1 ? std::make_unique<ThreadPool>(threads, true) : nullptr;
 
-        bool newReference = false;
-        const int n = snap ? chooseNode(newReference) : -1;
+        int mode = kFirst;
+        const int n = snap ? chooseNode(mode) : -1;
         if ((n < 0) != idle) {
             idle = n < 0;
             std::lock_guard<std::mutex> lock(mutex);
@@ -463,7 +483,7 @@ void DenseMapper::Impl::run() {
         }
         if (n >= 0) {
             const Clock::time_point start = Clock::now();
-            solve(n, newReference);
+            solve(n, mode);
             if (current.solving) {  // gave up part way
                 current.solving = false;
                 publishActivity();
@@ -544,13 +564,13 @@ void DenseMapper::Impl::takeSnapshot(std::shared_ptr<const Snapshot> s) {
 
 // Most urgent cell: never solved ones first (coarse before fine, recently
 // seen before old), then cells with many new observing keyframes.
-int DenseMapper::Impl::chooseNode(bool& newReference) const {
+int DenseMapper::Impl::chooseNode(int& mode) const {
     const Snapshot& S = *snap;
     const int latest = static_cast<int>(S.keyframes.size()) - 1;
     const int top = std::clamp(params.levels, 1, 12) - 1;
     int best = -1;
     double bestScore = 0;
-    bool bestNew = false;
+    int bestMode = kFirst;
     for (int i = 0; i < static_cast<int>(nodes.size()); ++i) {
         const Node& n = nodes[i];
         if (n.sparse < params.minSparsePoints || n.observers.size() < 3) continue;
@@ -562,7 +582,7 @@ int DenseMapper::Impl::chooseNode(bool& newReference) const {
         }
         const double recency = std::exp(-(latest - n.newest) / 15.0);
         double score;
-        bool isNew = false;
+        int m = kFirst;
         const int added = observers - n.solvedObservers;
         const double gain = double(added) / std::max(n.solvedObservers, 1);
         if (!n.solved) {
@@ -570,22 +590,23 @@ int DenseMapper::Impl::chooseNode(bool& newReference) const {
             score = 3 + 2 * recency + 0.1 * n.level;
         } else if (fresh && added >= 2 && gain >= params.resolveGain) {
             score = 1 + recency + 0.5 * std::min(gain, 2.0);
-            isNew = static_cast<int>(n.batches.size()) < params.maxReferences;
-        } else if (!n.extraTried && static_cast<int>(n.batches.size()) < params.maxReferences && observers >= 4 &&
-                   n.hasPoints()) {
-            // Idle: the same cell from another reference (what one view cannot see).
-            score = 0.5 + 0.3 * recency;
-            isNew = true;
+            m = kNewViews;
+        } else if (n.tier < kMaxTier) {  // idle: the weakest cells one tier better
+            score = 0.6 - 0.08 * n.tier + 0.2 * recency + 0.01 * n.level;
+            m = kUpgrade;
+        } else if (!n.exhausted) {  // top tier: references not used yet
+            score = 0.1 + 0.1 * recency - 0.001 * n.refsUsed.size();
+            m = kRotate;
         } else {
             continue;
         }
         if (score > bestScore) {
             bestScore = score;
             best = i;
-            bestNew = isNew;
+            bestMode = m;
         }
     }
-    newReference = bestNew;
+    mode = bestMode;
     return best;
 }
 
@@ -595,12 +616,16 @@ Vec3 DenseMapper::Impl::worldPoint(const DensePoint& p, const Pose& refPose) con
     return refPose.R.transposed() * (c - refPose.t);
 }
 
-void DenseMapper::Impl::solve(int nodeId, bool newReference) {
+void DenseMapper::Impl::solve(int nodeId, int mode) {
     const Snapshot& S = *snap;
     Node& n = nodes[nodeId];
     n.triedObservers = static_cast<int>(n.observers.size());
     n.solved = true;  // even if this attempt fails: its children may still work
-    if (newReference) n.extraTried = true;
+    const int tier = mode == kFirst ? 0 : mode == kNewViews ? std::max(n.tier, 0)
+                   : mode == kUpgrade ? std::min(n.tier + 1, kMaxTier) : kMaxTier;
+    n.tier = std::max(n.tier, tier);  // also when this attempt fails: no retry loop
+    const Tier& T = kTiers[tier];
+    const bool newReference = mode == kRotate || (mode == kUpgrade && static_cast<int>(n.batches.size()) < T.references);
 
     const double cell = cellSize(n.level);
     const Vec3 lo{n.x * cell, n.y * cell, n.z * cell};
@@ -622,11 +647,12 @@ void DenseMapper::Impl::solve(int nodeId, bool newReference) {
     const auto dirOf = [&](int k) { return normalized(center - S.keyframes[k].center); };
     if (n.batches.empty() || newReference) {
         double bestAngle = -1;
-        const int candidates = std::max(1, static_cast<int>(obs.size()) / 2);
+        const int candidates = mode == kRotate ? static_cast<int>(obs.size()) : std::max(1, static_cast<int>(obs.size()) / 2);
         for (int i = 0; i < candidates; ++i) {
             const int k = obs[i].second;
             const long frame = S.keyframes[k].frame;
             if (std::any_of(n.batches.begin(), n.batches.end(), [&](const Batch& b) { return b.ref == frame; })) continue;
+            if (std::find(n.refsUsed.begin(), n.refsUsed.end(), frame) != n.refsUsed.end()) continue;
             double minAngle = kPi;
             for (const Batch& b : n.batches) {
                 const auto it = keyframeOf.find(b.ref);
@@ -639,16 +665,26 @@ void DenseMapper::Impl::solve(int nodeId, bool newReference) {
             if (n.batches.empty()) break;  // the best observer
         }
     }
-    if (ref < 0) {
+    if (ref < 0 && mode == kRotate) {
+        n.exhausted = true;
+        return;
+    }
+    if (ref < 0) {  // again: the weakest result whose camera image is still there
+        int weakest = std::numeric_limits<int>::max();
         for (const Batch& b : n.batches) {
             const auto it = keyframeOf.find(b.ref);
-            if (it != keyframeOf.end() && images.count(b.ref)) {
+            if (it != keyframeOf.end() && images.count(b.ref) && b.tier < weakest) {
+                weakest = b.tier;
                 ref = it->second;
-                break;
             }
         }
     }
     if (ref < 0) return;
+    n.refsUsed.push_back(S.keyframes[ref].frame);
+    if (mode == kRotate && static_cast<int>(n.batches.size()) >= T.references) {  // make room: drop the oldest
+        n.batches.erase(std::min_element(n.batches.begin(), n.batches.end(),
+                                         [](const Batch& a, const Batch& b) { return a.at < b.at; }));
+    }
     const Snapshot::Keyframe& refKf = S.keyframes[ref];
     KeyImage& refImg = images.at(refKf.frame);
     const double refDist = norm(center - refKf.center);
@@ -671,7 +707,7 @@ void DenseMapper::Impl::solve(int nodeId, bool newReference) {
         v.R = S.keyframes[k].pose.R * refKf.pose.R.transposed();
         v.t = S.keyframes[k].pose.t - v.R * refKf.pose.t;
         views.push_back(v);
-        if (static_cast<int>(views.size()) >= std::min(params.neighbours, 16)) break;
+        if (static_cast<int>(views.size()) >= std::min(T.neighbours, 16)) break;
     }
     if (views.size() < 2) return;
     current.solving = true;
@@ -725,7 +761,7 @@ void DenseMapper::Impl::solve(int nodeId, bool newReference) {
 
     // Pyramid level: the cell's region at most maxRegionPx across.
     int level = 0;
-    while (level < kPyramid - 1 && std::max(u1 - u0, v1 - v0) / double(1 << level) > params.maxRegionPx) ++level;
+    while (level < kPyramid - 1 && std::max(u1 - u0, v1 - v0) / double(1 << level) > params.maxRegionPx * T.regionScale) ++level;
     const double scale = 1.0 / double(1 << level);
     const LevelCamera cam = levelCamera(S.K, toLevel0, level);
     const Image& refGray = refImg.gray[level];
@@ -740,9 +776,9 @@ void DenseMapper::Impl::solve(int nodeId, bool newReference) {
     n.solvedObservers = static_cast<int>(n.observers.size());
     if (x1 <= x0 || y1 <= y0) return;
 
-    const int step = std::max(1, params.pixelStep);
+    const int step = T.step;
     const int gw = (x1 - x0) / step + 1, gh = (y1 - y0) / step + 1;
-    const int D = std::max(params.depthSamples, 3);
+    const int D = T.depths;
     const double invNear = 1.0 / zMin, invFar = 1.0 / zMax;
     std::vector<float> depth(static_cast<std::size_t>(gw) * gh, 0.0f);  // 0 = rejected
     const float minNcc = static_cast<float>(params.minNcc);
@@ -841,9 +877,9 @@ void DenseMapper::Impl::solve(int nodeId, bool newReference) {
                 }
                 if (bestK <= 0 || bestK >= D - 1 || bestScore < minNcc - 0.1f) continue;
                 // Finer search between the neighbouring samples.
-                constexpr int kFine = 8;
-                float fine[kFine + 2];
-                double fineInv[kFine + 2];
+                const int kFine = T.fineSteps;
+                float fine[18];
+                double fineInv[18];
                 int bestF = 0;
                 for (int f = 0; f < kFine + 2; ++f) {
                     fineInv[f] = invAt(bestK - 1 + 2.0 * f / (kFine + 1));
@@ -876,6 +912,8 @@ void DenseMapper::Impl::solve(int nodeId, bool newReference) {
     // cell covers (its finer result replaces this one there).
     Batch batch;
     batch.ref = refKf.frame;
+    batch.tier = tier;
+    batch.at = Clock::now();
     const double toProcessed = 1.0 / toLevel0;
     const double cellBelow = n.level > 0 ? cellSize(n.level - 1) : 0;
     for (int gy = 0; gy < gh; ++gy) {

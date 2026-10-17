@@ -25,9 +25,7 @@ std::vector<SettingEntry> settingEntries(ViewerSettings& s) {
         {"Dense", "denseImageSize", "Dense image size", "px, long side", &s.session.denseParams.imageSize, 32, kInf, 80},
         {"Dense", "denseThreads", "Dense threads", "0 = half the cores", &s.session.denseParams.threads, 0, kInf, 1},
         {"Dense", "denseMinNcc", "Dense match threshold", "NCC, -1..1", &s.session.denseParams.minNcc, -1, 1, 0.05},
-        {"Dense", "denseNeighbours", "Dense views per region", "", &s.session.denseParams.neighbours, 2, kInf, 1},
         {"Dense", "denseMaxImages", "Dense keyframe images kept", "~0.4 MB each; oldest dropped", &s.session.denseParams.maxImages, 3, kInf, 50},
-        {"Dense", "denseMaxReferences", "Dense references per region", "", &s.session.denseParams.maxReferences, 1, kInf, 1},
         {"Processing", "gpu", "Extract features on the GPU", "Vulkan; CPU if none", &s.session.gpu, 0, 1, 1},
     };
     // clang-format on

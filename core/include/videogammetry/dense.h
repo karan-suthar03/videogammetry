@@ -28,14 +28,14 @@ struct DenseParams {
     int levels = 6;
     int minSparsePoints = 8;
     int maxRegionPx = 160;
-    // Plane sweep: depths tried per pixel (evenly in inverse depth over the
-    // cell), every `pixelStep` pixels of the cell's image region.
-    // The best one is then searched again around it with 8 finer steps.
-    int depthSamples = 32;
-    int pixelStep = 2;
+    // Quality rises over time: every cell is first solved by a very fast pass
+    // (every 4th pixel, 16 depths, 3 views, one reference camera); whenever
+    // nothing new waits, the weakest cells are solved again one tier better,
+    // up to every pixel, 96 depths, 12 views and 4 references (finer images
+    // from tier 3). At the top tier, cells keep being solved from reference
+    // cameras not used yet until every camera that sees them has been one.
     // Views matched against the reference: the keyframes sharing the most
     // map points with the cell, seen at an angle within these bounds.
-    int neighbours = 5;
     double minAngleDeg = 2.0, maxAngleDeg = 40.0;
     // A depth is kept when the two best views reach this normalized cross
     // correlation (5x5 patch) there and `minAgreeing` views (fewer if the
@@ -50,10 +50,8 @@ struct DenseParams {
     // keyframes see on sky (smooth bright area connected to the image top).
     int coverPoints = 50;
     double freeSpaceMargin = 0.15;  // relative to the surface depth
-    // Per cell, solved from up to this many reference keyframes over time
-    // (covers what one view cannot see); revisits with enough new views
-    // solve a reference again with them.
-    int maxReferences = 2;
+    // Revisits with enough new observing keyframes solve a cell again at
+    // its tier.
     double resolveGain = 0.5;  // new observing keyframes, relative to those at the last solve
     // Keyframe images kept at most (the oldest go first; about 0.4 MB each at
     // the default size). Regions seen only by dropped ones cannot be solved again.
