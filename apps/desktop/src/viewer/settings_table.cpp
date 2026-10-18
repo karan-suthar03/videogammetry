@@ -26,6 +26,8 @@ std::vector<SettingEntry> settingEntries(ViewerSettings& s) {
         {"Dense", "denseThreads", "Dense threads", "0 = half the cores", &s.session.denseParams.threads, 0, kInf, 1},
         {"Dense", "denseMinNcc", "Dense match threshold", "NCC, -1..1", &s.session.denseParams.minNcc, -1, 1, 0.05},
         {"Dense", "denseMaxImages", "Dense keyframe images kept", "~0.4 MB each; oldest dropped", &s.session.denseParams.maxImages, 3, kInf, 50},
+        {"Dense", "denseRefine", "Refine dense cells while idle", "off = solve each cell once", &s.session.denseParams.refine, 0, 1, 1},
+        {"Dense", "denseHideSparse", "Dense replaces sparse points", "off = only adds points", &s.session.denseParams.hideSparse, 0, 1, 1},
         {"Processing", "gpu", "Extract features on the GPU", "Vulkan; CPU if none", &s.session.gpu, 0, 1, 1},
     };
     // clang-format on

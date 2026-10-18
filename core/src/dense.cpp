@@ -157,6 +157,7 @@ struct Node {
     bool fine = false;        // matched at full image size: no children needed
     int triedObservers = 0;   // observer count at the last attempt
     int solvedObservers = 0;  // ... at the last successful solve
+    int triedSparse = 0;      // map points in it at the last attempt
     int tier = -1;            // quality tier of the last solve
     std::vector<long> refsUsed;  // reference cameras tried at the top tier
     bool exhausted = false;   // every camera seeing it has been a reference
@@ -591,6 +592,11 @@ int DenseMapper::Impl::chooseNode(int& mode) const {
         } else if (fresh && added >= 2 && gain >= params.resolveGain) {
             score = 1 + recency + 0.5 * std::min(gain, 2.0);
             m = kNewViews;
+        } else if (n.sparse > n.triedSparse) {  // new map points in an already solved cell
+            score = 0.9 + recency;
+            m = kNewViews;
+        } else if (!params.refine) {
+            continue;
         } else if (n.tier < kMaxTier) {  // idle: the weakest cells one tier better
             score = 0.6 - 0.08 * n.tier + 0.2 * recency + 0.01 * n.level;
             m = kUpgrade;
@@ -620,6 +626,7 @@ void DenseMapper::Impl::solve(int nodeId, int mode) {
     const Snapshot& S = *snap;
     Node& n = nodes[nodeId];
     n.triedObservers = static_cast<int>(n.observers.size());
+    n.triedSparse = n.sparse;
     n.solved = true;  // even if this attempt fails: its children may still work
     const int tier = mode == kFirst ? 0 : mode == kNewViews ? std::max(n.tier, 0)
                    : mode == kUpgrade ? std::min(n.tier + 1, kMaxTier) : kMaxTier;
@@ -1055,7 +1062,7 @@ void DenseMapper::Impl::publish() {
     }
     const int top = std::clamp(params.levels, 1, 12) - 1;
     const float keep = static_cast<float>(1.0 - params.freeSpaceMargin);
-    for (std::size_t i = 0; i < S.points.size(); ++i) {
+    for (std::size_t i = 0; i < S.points.size() && params.hideSparse; ++i) {
         const Vec3& X = S.points[i];
         bool remove = skyVotes[i] > groundVotes[i];
         for (int l = 0; l <= top && !remove; ++l) {  // the deepest solved cell holding it

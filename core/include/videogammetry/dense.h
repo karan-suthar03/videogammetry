@@ -56,6 +56,11 @@ struct DenseParams {
     // Keyframe images kept at most (the oldest go first; about 0.4 MB each at
     // the default size). Regions seen only by dropped ones cannot be solved again.
     int maxImages = 2000;
+    // Off: no idle work. Cells are solved once (and again when new views
+    // arrive), never upgraded through the tiers or rotated through references.
+    bool refine = true;
+    // Off: the dense cloud only adds points; no map point is replaced or removed.
+    bool hideSparse = true;
 };
 
 // Dense reconstruction in the background: grows a dense colored cloud from
