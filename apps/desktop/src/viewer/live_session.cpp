@@ -262,7 +262,8 @@ void LiveSession::runDense(double processingFps, const std::string& summary) {
             dense->addImage(index, frame);
             ++next;
             if (Clock::now() - lastStatus >= std::chrono::milliseconds(200)) {
-                std::snprintf(buf, sizeof(buf), "dense: reading keyframe images %zu / %zu", next, needed.size());
+                std::snprintf(buf, sizeof(buf), "dense: reading keyframe images %zu / %zu (kept %d of %d keyframes)", next,
+                              needed.size(), dense->progress().selected, dense->progress().totalKeyframes);
                 status(buf);
                 lastStatus = Clock::now();
             }
@@ -276,11 +277,11 @@ void LiveSession::runDense(double processingFps, const std::string& summary) {
         if (!p.finished && Clock::now() - lastStatus < std::chrono::milliseconds(200)) return;
         lastStatus = Clock::now();
         if (p.finished) {
-            std::snprintf(buf, sizeof(buf), "dense: done, %.2f M points from %d of %d keyframes (%d blurry) (%dx%d)",
-                          p.points / 1e6, p.references, p.keyframes, p.blurry, p.width, p.height);
+            std::snprintf(buf, sizeof(buf), "dense: done, %.2f M points from %d keyframes (kept %d of %d)   %dx%d",
+                          p.points / 1e6, p.references, p.selected, p.totalKeyframes, p.width, p.height);
         } else {
-            std::snprintf(buf, sizeof(buf), "dense: depth maps %d / %d selected keyframes of %d (%d blurry)   last %.1f s"
-                          "   %.2f M points   %dx%d", p.depthMaps, p.references, p.keyframes, p.blurry,
+            std::snprintf(buf, sizeof(buf), "dense: depth maps %d / %d (kept %d of %d keyframes)   last %.1f s"
+                          "   %.2f M points   %dx%d", p.depthMaps, p.references, p.selected, p.totalKeyframes,
                           p.lastDepthMs / 1000, p.points / 1e6, p.width, p.height);
         }
         status(buf);

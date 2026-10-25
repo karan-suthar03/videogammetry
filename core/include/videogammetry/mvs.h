@@ -50,16 +50,14 @@ struct DenseParams {
     double maxDepthDiff = 0.01;
     double maxReprojPx = 2.0;
     double maxNormalDeg = 15.0;
-    // Keyframe selection before the depth maps. Blurry keyframes (sharpness
-    // below `minSharpness` times the median of the keyframes around them)
-    // are not used at all. Of keyframes that see the scene from nearly the
-    // same place (centers closer than `referenceSpacing` times the scene
-    // depth and directions within `referenceAngleDeg`), only the sharpest
-    // gets a depth map; the others still serve as views to match against.
+    // Keyframe selection, before anything else: of keyframes that see the
+    // scene from nearly the same place (centers closer than
+    // `keyframeSpacing` times their median scene depth) and direction
+    // (within `keyframeAngleDeg`), only the one seeing the most map points
+    // is kept. The others are not decoded or used at all.
     bool selectKeyframes = true;
-    double minSharpness = 0.6;
-    double referenceSpacing = 0.05;
-    double referenceAngleDeg = 10.0;
+    double keyframeSpacing = 0.05;
+    double keyframeAngleDeg = 10.0;
     int threads = 0;  // 0 = all hardware threads
 };
 
@@ -128,8 +126,9 @@ public:
 
     struct Progress {
         int keyframes = 0;   // with an image
-        int references = 0;  // selected for a depth map (known once run() starts)
-        int blurry = 0;      // left out as blurry
+        int totalKeyframes = 0;  // of the map, before the selection
+        int selected = 0;        // kept by the selection
+        int references = 0;      // with enough views for a depth map (known once run() starts)
         int depthMaps = 0;   // computed
         int fused = 0;
         long points = 0;
@@ -147,7 +146,7 @@ private:
     struct View;
     void computeDepth(int index, ThreadPool& pool, const std::atomic<bool>& cancel);
     void fuse(int index);
-    void selectReferences();
+    void checkViews();
 
     DenseParams params_;
     std::vector<View> views_;
