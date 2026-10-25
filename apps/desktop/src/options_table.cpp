@@ -112,6 +112,14 @@ const char* settingDetails(const char* key) {
         {"showKeyframes",
          "Draws a small blue camera frustum at every keyframe (the frames the map is built from). Turning it off "
          "uncovers the points behind dense camera paths. K while playing."},
+        {"showSparse",
+         "Draws the sparse map: the points tracking and mapping triangulated from features. Turning it off shows "
+         "only the dense cloud (and the cameras), e.g. to look at the dense result without the sparse points over "
+         "it. Only the display changes: the map is still built and saved. P while playing."},
+        {"showDense",
+         "Draws the dense cloud (built after the video, see the Dense section) together with the sparse map. Only "
+         "the display changes: the dense stage keeps running and saving still writes it. Turning it off shows the "
+         "sparse map alone, and the view stays fast while millions of dense points exist. D while playing."},
 
         {"gpu",
          "Runs feature extraction (gray conversion, pyramid, FAST, Harris, orientation, descriptors) on the "
@@ -119,6 +127,72 @@ const char* settingDetails(const char* key) {
          "throughput at default settings on an RTX 3060 laptop. It picks exactly the same keypoints as the CPU; "
          "about one descriptor bit in three million differs (GPU sine/cosine rounding). Without a usable GPU, or "
          "for absurd pyramid settings, it falls back to the CPU; the status line shows which one is used."},
+
+        {"dense",
+         "After the video ends and the final bundle adjustment is done, builds a dense cloud: a depth for nearly "
+         "every pixel of the selected keyframes, kept where several views agree. It decodes the video again for "
+         "the keyframe images (a camera capture keeps them while recording), works through the keyframes in video "
+         "order and shows the cloud growing along the path; the green status line shows its progress. S saves it "
+         "as <name>_dense.ply next to the sparse cloud, with normals. Off stops after the sparse map. Takes from "
+         "minutes to much longer at full resolution; closing or opening another video stops it."},
+        {"denseImageSize",
+         "Long side, in pixels, of the keyframe images the dense stage matches; 0 uses the video's own size. Larger "
+         "finds finer detail and many more points (one candidate per pixel), but time and memory grow with the "
+         "pixel count: half the size is about 4x faster with 4x fewer points. Smaller gives a quick, coarser "
+         "cloud. Independent of the tracking frame size. Lowered automatically when it would not fit the memory "
+         "limit; the status line shows the size used."},
+        {"denseMaxMemoryMB",
+         "Memory the dense stage may use for the images and depth maps of all kept keyframes (about 7 bytes per "
+         "pixel per keyframe). When the image size would need more, it is lowered until it fits. Raise it to keep "
+         "full resolution on long videos with many keyframes (if the machine has the memory); lower it on a "
+         "machine with little memory. Fewer kept keyframes (larger keyframe spacing) also make room."},
+        {"denseSourceViews",
+         "Keyframes each keyframe is matched against to find its depths: those sharing the most map points with it "
+         "at a good viewing angle (3 to 40 degrees apart). More views find depths in more places (parts hidden in "
+         "some views are seen in others) and reject wrong matches better, but each depth map takes proportionally "
+         "longer. Fewer is faster and leaves more holes and noise. Below 2 nothing can be computed."},
+        {"denseScales",
+         "Image levels the depth search works through, coarse to fine, each half the size of the next. Coarse "
+         "levels find the rough shape quickly and help large plain areas (walls, roads) get depths; the full-size "
+         "level adds the detail. More levels help large texture-poor areas and big images; 1 searches at full "
+         "size only, which is slower to settle and leaves more holes in plain areas."},
+        {"denseIterations",
+         "Rounds of the depth search at the coarsest level. Each round every pixel tries its neighbours' surfaces "
+         "and a few random changes of its own, so good depths spread across the image. More rounds settle more "
+         "pixels (fewer holes, smoother surfaces) at a higher cost; the gain flattens after about 6. Too few leaves "
+         "random depths that are filtered out as holes."},
+        {"denseFineIterations",
+         "Rounds of the depth search at each finer level, starting from the coarser level's result. More rounds "
+         "refine edges and small details further at a higher cost per keyframe (the full-size level is the most "
+         "expensive part); 0 only upsamples the coarse result, which is fast but blocky."},
+        {"denseMinNcc",
+         "How well a pixel's 11x11 patch must match in its best views (normalized cross correlation, 1 = identical) "
+         "for its depth to be kept. Higher keeps only confident depths: cleaner but fewer points, with more holes on "
+         "shiny, dark or plain surfaces. Lower keeps more depths, including wrong ones (the agreeing-views check "
+         "still removes most). Around 0.3 to 0.7 is useful."},
+        {"denseMinViews",
+         "How many other keyframes must have measured the same surface (same depth within 1%, same normal within "
+         "15 degrees) for a pixel to become a dense point; the point is the average of all of them. Higher gives a "
+         "cleaner, more accurate cloud with fewer points and more holes; 1 keeps anything two views agree on, "
+         "which is denser but noisier, with floating points."},
+        {"denseSelect",
+         "Before the dense stage, thins out keyframes that see the scene from nearly the same place and direction "
+         "and keeps only the one that tracked the most map points in each such spot. The others are not decoded, "
+         "matched or stored, so the stage is faster and uses less memory (room for a larger image size) and loses "
+         "almost nothing, since near-duplicates add little. Off uses every keyframe of the map."},
+        {"denseSpacing",
+         "How close two keyframes must be to count as the same spot, as a fraction of their scene depth (0.05 = "
+         "5 cm per meter of distance to what they see). Larger keeps fewer, more spread-out keyframes: faster, but "
+         "parts seen only briefly may get fewer views; smaller keeps more of them; 0 keeps every keyframe. 0.05 "
+         "matches the smallest viewing angle the matching looks for (3 degrees)."},
+        {"denseKeyframeAngle",
+         "Keyframes at nearly the same place but turned more than this many degrees from each other see different "
+         "parts of the scene, so both are kept. Larger thins out more of the keyframes where the camera turned in "
+         "place; smaller keeps more of them; 0 keeps every keyframe."},
+        {"denseThreads",
+         "CPU threads for the dense stage; 0 uses all of them. It runs after tracking is done, so all cores is "
+         "normally best; fewer keep the computer responsive for other work while it runs, at a proportionally "
+         "slower dense stage."},
 
         {"processSize",
          "Frames are shrunk so that their long side is at most this many pixels before features are extracted; 0 "

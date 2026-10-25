@@ -208,7 +208,7 @@ void SceneRenderer::render(const LiveSnapshot& scene, const OrbitView& view, con
                       options.pointSize, rgb(p.r, p.g, p.b));
             }
     }
-    for (std::size_t i = 0; i < scene.points.size(); ++i) {
+    for (std::size_t i = 0; options.showSparse && i < scene.points.size(); ++i) {
         const vg::Point& p = scene.points[i];
         const float z = r[6] * p.x + r[7] * p.y + r[8] * p.z + t[2];
         if (z < nearZ) continue;

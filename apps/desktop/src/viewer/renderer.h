@@ -46,6 +46,7 @@ struct RenderOptions {
     bool highlightTracked = true; // points seen in the current frame drawn green
     bool colorByNoise = true;     // points colored by depth uncertainty instead of their own color
     bool showKeyframes = true;
+    bool showSparse = true;       // the map points
     bool showDense = true;        // dense cloud
 };
 
