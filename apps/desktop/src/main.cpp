@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -35,6 +36,9 @@ void printUsage() {
         "  --config <file.ini>         reconstruction options from a settings file, e.g. the viewer's\n"
         "                              %%APPDATA%%/videogammetry/viewer.ini (options after it override it)\n"
         "  --trajectory <file.ply>     also write the keyframe camera positions\n"
+        "  --export-colmap <dir>       also write the keyframes as a COLMAP text model (poses + images\n"
+        "                              undistorted, at the --size resolution; map points), e.g. for 3DGS\n"
+        "  --export-max <n>            keyframes in that export, evenly spaced, 0 = all (default 300)\n"
         "  --size <px>                 long side of the frame is downscaled to this, 0 = full resolution (default 0)\n"
         "  --threads <n>               worker threads for tracking/mapping, 0 = all hardware threads (default 0)\n"
         "  --extract-workers <n>       frames whose features are extracted in parallel, 0 = all hardware threads\n"
@@ -70,6 +74,157 @@ std::string numbered(const std::filesystem::path& dir, const char* prefix, long 
     return (dir / name).string();
 }
 
+// Rotation matrix -> unit quaternion (w, x, y, z).
+std::array<double, 4> toQuaternion(const vg::Mat3& R) {
+    std::array<double, 4> q;
+    const double tr = R(0, 0) + R(1, 1) + R(2, 2);
+    if (tr > 0) {
+        const double s = 2 * std::sqrt(tr + 1);
+        q = {s / 4, (R(2, 1) - R(1, 2)) / s, (R(0, 2) - R(2, 0)) / s, (R(1, 0) - R(0, 1)) / s};
+    } else if (R(0, 0) > R(1, 1) && R(0, 0) > R(2, 2)) {
+        const double s = 2 * std::sqrt(1 + R(0, 0) - R(1, 1) - R(2, 2));
+        q = {(R(2, 1) - R(1, 2)) / s, s / 4, (R(0, 1) + R(1, 0)) / s, (R(0, 2) + R(2, 0)) / s};
+    } else if (R(1, 1) > R(2, 2)) {
+        const double s = 2 * std::sqrt(1 + R(1, 1) - R(0, 0) - R(2, 2));
+        q = {(R(0, 2) - R(2, 0)) / s, (R(0, 1) + R(1, 0)) / s, s / 4, (R(1, 2) + R(2, 1)) / s};
+    } else {
+        const double s = 2 * std::sqrt(1 + R(2, 2) - R(0, 0) - R(1, 1));
+        q = {(R(1, 0) - R(0, 1)) / s, (R(0, 2) + R(2, 0)) / s, (R(1, 2) + R(2, 1)) / s, s / 4};
+    }
+    if (q[0] < 0) for (double& v : q) v = -v;
+    return q;
+}
+
+// Writes the keyframes as a COLMAP text model for 3D Gaussian Splatting:
+// <dir>/images/*.bmp (frames at the processing size, undistorted to pinhole),
+// <dir>/sparse/0/{cameras,images,points3D}.txt with one PINHOLE camera, the
+// map points and their keypoints per image. Decodes the video a second time to get the keyframe images.
+// At most `maxImages` keyframes, evenly spaced in video order (0 = all),
+// with the long side of the images at most `maxSize` (0 = video size).
+bool exportColmap(const std::string& video, const vg::Reconstructor& rec, const std::filesystem::path& dir,
+                  std::size_t maxImages, int maxSize) {
+    std::vector<const vg::Keyframe*> all;
+    for (const vg::Keyframe& kf : rec.keyframes()) all.push_back(&kf);
+    std::sort(all.begin(), all.end(), [](auto* a, auto* b) { return a->frameIndex < b->frameIndex; });
+    std::vector<const vg::Keyframe*> kfs = all;
+    if (maxImages > 0 && all.size() > maxImages) {
+        kfs.clear();
+        for (std::size_t i = 0; i < maxImages; ++i)
+            kfs.push_back(all[maxImages == 1 ? 0 : i * (all.size() - 1) / (maxImages - 1)]);
+    }
+    if (kfs.empty()) {
+        std::fprintf(stderr, "error: no keyframes to export\n");
+        return false;
+    }
+    const std::filesystem::path imageDir = dir / "images", sparseDir = dir / "sparse" / "0";
+    if (!ensureDir(imageDir) || !ensureDir(sparseDir)) return false;
+
+    VideoReader reader;
+    std::string error;
+    if (!reader.open(video, error)) {
+        std::fprintf(stderr, "error: %s\n", error.c_str());
+        return false;
+    }
+    reader.setMaxSize(maxSize);
+
+    // Intrinsics are in processed pixels with integer pixel centers; COLMAP
+    // puts pixel centers at +0.5, so a processed x maps to (x + 0.5) * s,
+    // s = exported pixels per processed pixel. The frames are decoded with
+    // the same maximum size as the ones the reconstructor was given, so s is
+    // its processScale (pixels of the frame it received per processed pixel,
+    // not of the video's native size).
+    const vg::CameraIntrinsics& K = rec.intrinsics();
+    int width = 0, height = 0;
+    double fx = 0, fy = 0, cx = 0, cy = 0, scale = 1;
+    const double k1 = K.k1;
+    std::vector<float> mapX, mapY;  // source position (frame pixel index space) of each undistorted pixel
+
+    const std::vector<vg::MapPoint>& points = rec.mapPoints();
+    std::ofstream images(sparseDir / "images.txt");
+    images << "# IMAGE_ID QW QX QY QZ TX TY TZ CAMERA_ID NAME, then POINTS2D[] as (X Y POINT3D_ID)\n";
+    RgbImage out;
+    std::size_t next = 0;
+    vg::FrameView frame;
+    for (long index = 0; next < kfs.size() && reader.read(frame); ++index) {
+        if (mapX.empty()) {
+            width = frame.width;
+            height = frame.height;
+            const double s = scale = rec.processScale();
+            fx = K.fx * s, fy = K.fy * s, cx = (K.cx + 0.5) * s, cy = (K.cy + 0.5) * s;
+            mapX.resize(std::size_t(width) * height);
+            mapY.resize(mapX.size());
+            for (int y = 0; y < height; ++y)
+                for (int x = 0; x < width; ++x) {
+                    const double nx = (x + 0.5 - cx) / fx, ny = (y + 0.5 - cy) / fy;
+                    const double d = 1 + k1 * (nx * nx + ny * ny);
+                    mapX[std::size_t(y) * width + x] = float(fx * nx * d + cx - 0.5);
+                    mapY[std::size_t(y) * width + x] = float(fy * ny * d + cy - 0.5);
+                }
+            out.width = width;
+            out.height = height;
+            out.pixels.resize(std::size_t(width) * height * 3);
+        }
+        if (index != kfs[next]->frameIndex) continue;
+        for (int y = 0; y < height; ++y)
+            for (int x = 0; x < width; ++x) {
+                const float sx = std::clamp(mapX[std::size_t(y) * width + x], 0.0f, float(width - 1));
+                const float sy = std::clamp(mapY[std::size_t(y) * width + x], 0.0f, float(height - 1));
+                const int x0 = std::min(int(sx), width - 2), y0 = std::min(int(sy), height - 2);
+                const float ax = sx - x0, ay = sy - y0;
+                const std::uint8_t* p = frame.data + std::size_t(y0) * frame.stride + x0 * 3;
+                std::uint8_t* o = out.pixels.data() + (std::size_t(y) * width + x) * 3;
+                for (int c = 0; c < 3; ++c) {
+                    const float top = p[c] * (1 - ax) + p[3 + c] * ax;
+                    const float bottom = p[frame.stride + c] * (1 - ax) + p[frame.stride + 3 + c] * ax;
+                    o[c] = std::uint8_t(top * (1 - ay) + bottom * ay + 0.5f);
+                }
+            }
+        char name[32];
+        std::snprintf(name, sizeof(name), "frame_%05ld.bmp", index);
+        if (!writeImage(out.view(), (imageDir / name).string())) {
+            std::fprintf(stderr, "error: could not write %s\n", (imageDir / name).string().c_str());
+            return false;
+        }
+        const vg::Keyframe& kf = *kfs[next];
+        const std::array<double, 4> q = toQuaternion(kf.pose.R);
+        char line[256];
+        std::snprintf(line, sizeof(line), "%zu %.9f %.9f %.9f %.9f %.9f %.9f %.9f 1 %s\n", next + 1, q[0], q[1], q[2],
+                      q[3], kf.pose.t.x, kf.pose.t.y, kf.pose.t.z, name);
+        images << line;
+        // Observed (undistorted) keypoints of map points, in exported pixels.
+        for (std::size_t i = 0; i < kf.keypoints.size(); ++i) {
+            const int id = kf.pointIds[i];
+            if (id < 0 || std::size_t(id) >= points.size() || points[std::size_t(id)].bad) continue;
+            std::snprintf(line, sizeof(line), "%.2f %.2f %d ", (kf.keypoints[i].x + 0.5) * scale,
+                          (kf.keypoints[i].y + 0.5) * scale, id + 1);
+            images << line;
+        }
+        images << "\n";
+        ++next;
+    }
+    if (next < kfs.size()) {
+        std::fprintf(stderr, "error: video ended before keyframe frame %ld\n", kfs[next]->frameIndex);
+        return false;
+    }
+
+    std::ofstream cameras(sparseDir / "cameras.txt");
+    char line[256];
+    std::snprintf(line, sizeof(line), "1 PINHOLE %d %d %.6f %.6f %.6f %.6f\n", width, height, fx, fy, cx, cy);
+    cameras << "# CAMERA_ID MODEL WIDTH HEIGHT PARAMS[]\n" << line;
+    std::ofstream pointsFile(sparseDir / "points3D.txt");
+    pointsFile << "# POINT3D_ID X Y Z R G B ERROR (no tracks)\n";
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        const vg::MapPoint& p = points[i];
+        if (p.bad) continue;
+        std::snprintf(line, sizeof(line), "%zu %.6f %.6f %.6f %d %d %d 0\n", i + 1, p.position.x, p.position.y,
+                      p.position.z, p.color[0], p.color[1], p.color[2]);
+        pointsFile << line;
+    }
+    std::printf("export:  %zu keyframes to %s (PINHOLE %dx%d, f %.1f px, undistorted k1 %.3f)\n", kfs.size(),
+                dir.string().c_str(), width, height, fx, k1);
+    return true;
+}
+
 const char* stateName(vg::Reconstructor::State s) {
     switch (s) {
         case vg::Reconstructor::State::Initializing: return "initializing";
@@ -85,6 +240,8 @@ int main(int argc, char** argv) {
     std::string input;
     std::string output = "cloud.ply";
     std::string trajectoryPath;
+    std::string colmapDir;
+    std::size_t exportMax = 300;
     long saveFrameIndex = -1;
     std::string saveFramePath;
     vg::Reconstructor::Options options;
@@ -112,6 +269,10 @@ int main(int argc, char** argv) {
             }
         } else if (std::strcmp(argv[i], "--trajectory") == 0 && i + 1 < argc) {
             trajectoryPath = argv[++i];
+        } else if (std::strcmp(argv[i], "--export-colmap") == 0 && i + 1 < argc) {
+            colmapDir = argv[++i];
+        } else if (std::strcmp(argv[i], "--export-max") == 0 && i + 1 < argc) {
+            exportMax = static_cast<std::size_t>(std::max(0L, std::strtol(argv[++i], nullptr, 10)));
         } else if (std::strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
             options.processSize = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
         } else if (std::strcmp(argv[i], "--threads") == 0 && i + 1 < argc) {
@@ -389,6 +550,12 @@ int main(int argc, char** argv) {
         if (vg::writePly(traj, trajectoryPath)) {
             std::printf("output:  %s (%zu camera positions)\n", trajectoryPath.c_str(), traj.points.size());
         }
+    }
+
+    if (!colmapDir.empty()) {
+        if (st.maps > 1 && reconstructor.trajectory().size() != reconstructor.keyframes().size())
+            std::fprintf(stderr, "warning: tracking restarted; exporting the last map, not the largest\n");
+        if (!exportColmap(input, reconstructor, colmapDir, exportMax, options.processSize)) return 1;
     }
 
     if (!dumpDir.empty()) {
