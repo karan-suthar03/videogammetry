@@ -8,8 +8,10 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "frame_prefetcher.h"
@@ -46,6 +48,12 @@ void printUsage() {
         "                              points (better splat initialization) instead of the sparse ones\n"
         "  --dense-size <px>           long side of the images the dense stage matches, 0 = video size (default 0)\n"
         "  --dense-cpu                 dense depth maps on the CPU even when there is a GPU\n"
+        "  --export-points <file.ply>  with --export-colmap: points3D.txt holds the points of this cloud (e.g. a\n"
+        "                              dense cloud saved by the viewer) instead of the map points\n"
+        "  --align-to <sparse.ply>     the sparse cloud saved together with that file: it is aligned onto this\n"
+        "                              run's map (scale, rotation, translation; ICP) and the same transform moves\n"
+        "                              the --export-points cloud into this run's frame. Use the viewer's settings\n"
+        "                              (--config) so both runs track alike\n"
         "  --size <px>                 long side of the frame is downscaled to this, 0 = full resolution (default 0)\n"
         "  --threads <n>               worker threads for tracking/mapping, 0 = all hardware threads (default 0)\n"
         "  --extract-workers <n>       frames whose features are extracted in parallel, 0 = all hardware threads\n"
@@ -295,6 +303,168 @@ vg::PointCloud buildDense(const std::string& video, const vg::Reconstructor& rec
     return dense.pointCloud();
 }
 
+// Reads a binary little-endian PLY vertex list (as vg::writePly writes it,
+// with or without normals): positions and colors.
+bool readPly(const std::string& path, vg::PointCloud& out, std::string& error) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        error = "could not open " + path;
+        return false;
+    }
+    std::string line;
+    std::getline(in, line);
+    if (line.rfind("ply", 0) != 0) {
+        error = path + " is not a PLY file";
+        return false;
+    }
+    std::size_t count = 0, stride = 0;
+    int ox = -1, oy = -1, oz = -1, ored = -1, ogreen = -1, oblue = -1;
+    bool binary = false, inVertex = false;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line == "end_header") break;
+        std::istringstream s(line);
+        std::string word, type, name;
+        s >> word;
+        if (word == "format") {
+            s >> type;
+            binary = type == "binary_little_endian";
+        } else if (word == "element") {
+            s >> name >> count;
+            inVertex = name == "vertex";
+            if (!inVertex) count = 0;
+        } else if (word == "property" && inVertex) {
+            s >> type >> name;
+            const int offset = static_cast<int>(stride);
+            stride += type == "double" ? 8 : (type == "float" || type == "int" || type == "uint") ? 4
+                    : (type == "short" || type == "ushort") ? 2 : 1;
+            if (name == "x") ox = offset;
+            if (name == "y") oy = offset;
+            if (name == "z") oz = offset;
+            if (name == "red") ored = offset;
+            if (name == "green") ogreen = offset;
+            if (name == "blue") oblue = offset;
+            if ((name == "x" || name == "y" || name == "z") && type != "float") {
+                error = path + ": positions must be float";
+                return false;
+            }
+        }
+    }
+    if (!binary || ox < 0 || oy < 0 || oz < 0) {
+        error = path + ": needs binary little-endian float x, y, z";
+        return false;
+    }
+    std::vector<char> data(count * stride);
+    in.read(data.data(), static_cast<std::streamsize>(data.size()));
+    if (static_cast<std::size_t>(in.gcount()) != data.size()) {
+        error = path + " is truncated";
+        return false;
+    }
+    out.points.resize(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        const char* v = data.data() + i * stride;
+        vg::Point& p = out.points[i];
+        std::memcpy(&p.x, v + ox, 4);
+        std::memcpy(&p.y, v + oy, 4);
+        std::memcpy(&p.z, v + oz, 4);
+        if (ored >= 0) p.r = static_cast<std::uint8_t>(v[ored]);
+        if (ogreen >= 0) p.g = static_cast<std::uint8_t>(v[ogreen]);
+        if (oblue >= 0) p.b = static_cast<std::uint8_t>(v[oblue]);
+    }
+    return true;
+}
+
+// Similarity transform x -> s R x + t.
+struct Similarity {
+    double s = 1;
+    vg::Mat3 R = vg::Mat3::identity();
+    vg::Vec3 t;
+    vg::Vec3 apply(const vg::Vec3& x) const { return R * x * s + t; }
+};
+
+// Aligns `src` onto `dst` (two reconstructions of the same scene that start
+// at the same camera, so they agree up to scale at first): scale from the
+// median distance to the origin, then ICP with a similarity transform
+// (Umeyama) and a shrinking match radius. `fit` receives the inlier RMS
+// relative to the size of `dst`, `inliers` the fraction of `src` matched.
+Similarity alignClouds(std::vector<vg::Vec3> src, const std::vector<vg::Vec3>& dst, double& fit, double& inliers) {
+    Similarity T;
+    fit = 1;
+    inliers = 0;
+    if (src.size() < 10 || dst.size() < 10) return T;
+    if (src.size() > 50000) {  // evenly spaced subset
+        std::vector<vg::Vec3> sub;
+        for (std::size_t i = 0; i < 50000; ++i) sub.push_back(src[i * src.size() / 50000]);
+        src = std::move(sub);
+    }
+    const auto medianNorm = [](const std::vector<vg::Vec3>& v, const vg::Vec3& c) {
+        std::vector<double> d;
+        for (const vg::Vec3& p : v) d.push_back(vg::norm(p - c));
+        std::nth_element(d.begin(), d.begin() + d.size() / 2, d.end());
+        return d[d.size() / 2];
+    };
+    const double dstSize = medianNorm(dst, {});
+    T.s = dstSize / std::max(1e-12, medianNorm(src, {}));
+
+    for (double radius = 0.2 * dstSize; radius > 0.004 * dstSize; radius *= 0.5) {
+        // Grid of `dst` with cells of the match radius.
+        std::unordered_map<long long, std::vector<int>> grid;
+        const auto key = [&](long long x, long long y, long long z) { return (x * 73856093LL) ^ (y * 19349663LL) ^ (z * 83492791LL); };
+        const auto cell = [&](double v) { return static_cast<long long>(std::floor(v / radius)); };
+        for (std::size_t i = 0; i < dst.size(); ++i)
+            grid[key(cell(dst[i].x), cell(dst[i].y), cell(dst[i].z))].push_back(static_cast<int>(i));
+        for (int iter = 0; iter < 10; ++iter) {
+            std::vector<std::pair<vg::Vec3, vg::Vec3>> pairs;  // (src, dst)
+            double sq = 0;
+            for (const vg::Vec3& p0 : src) {
+                const vg::Vec3 p = T.apply(p0);
+                const long long cx = cell(p.x), cy = cell(p.y), cz = cell(p.z);
+                double best = radius * radius;
+                int bi = -1;
+                for (long long dx = -1; dx <= 1; ++dx)
+                    for (long long dy = -1; dy <= 1; ++dy)
+                        for (long long dz = -1; dz <= 1; ++dz) {
+                            const auto it = grid.find(key(cx + dx, cy + dy, cz + dz));
+                            if (it == grid.end()) continue;
+                            for (int j : it->second) {
+                                const vg::Vec3 d = dst[static_cast<std::size_t>(j)] - p;
+                                const double dd = vg::dot(d, d);
+                                if (dd < best) best = dd, bi = j;
+                            }
+                        }
+                if (bi < 0) continue;
+                pairs.push_back({p0, dst[static_cast<std::size_t>(bi)]});
+                sq += best;
+            }
+            if (pairs.size() < 10) return T;
+            fit = std::sqrt(sq / pairs.size()) / dstSize;
+            inliers = double(pairs.size()) / src.size();
+            // Umeyama: the similarity minimizing the squared pair distances.
+            vg::Vec3 ma, mb;
+            for (const auto& [a, b] : pairs) ma = ma + a, mb = mb + b;
+            ma = ma * (1.0 / pairs.size());
+            mb = mb * (1.0 / pairs.size());
+            vg::Mat3 C;
+            double va = 0;
+            for (const auto& [a, b] : pairs) {
+                const vg::Vec3 da = a - ma, db = b - mb;
+                va += vg::dot(da, da);
+                for (int r = 0; r < 3; ++r)
+                    for (int c = 0; c < 3; ++c) C(r, c) += db[r] * da[c];
+            }
+            vg::Mat3 U, V;
+            vg::Vec3 D;
+            vg::svd3(C, U, D, V);
+            vg::Mat3 S = vg::Mat3::identity();
+            if ((U * V.transposed()).determinant() < 0) S(2, 2) = -1;
+            T.R = U * S * V.transposed();
+            T.s = (D.x * S(0, 0) + D.y * S(1, 1) + D.z * S(2, 2)) / std::max(1e-12, va);
+            T.t = mb - T.R * ma * T.s;
+        }
+    }
+    return T;
+}
+
 const char* stateName(vg::Reconstructor::State s) {
     switch (s) {
         case vg::Reconstructor::State::Initializing: return "initializing";
@@ -313,6 +483,7 @@ int main(int argc, char** argv) {
     std::string colmapDir;
     std::size_t exportMax = 300;
     bool dense = false, denseGpu = true;
+    std::string exportPointsPath, alignToPath;
     vg::DenseParams denseParams;
     long saveFrameIndex = -1;
     std::string saveFramePath;
@@ -347,6 +518,10 @@ int main(int argc, char** argv) {
             dense = true;
         } else if (std::strcmp(argv[i], "--dense-size") == 0 && i + 1 < argc) {
             denseParams.imageSize = static_cast<int>(std::max(0L, std::strtol(argv[++i], nullptr, 10)));
+        } else if (std::strcmp(argv[i], "--export-points") == 0 && i + 1 < argc) {
+            exportPointsPath = argv[++i];
+        } else if (std::strcmp(argv[i], "--align-to") == 0 && i + 1 < argc) {
+            alignToPath = argv[++i];
         } else if (std::strcmp(argv[i], "--dense-cpu") == 0) {
             denseGpu = false;
         } else if (std::strcmp(argv[i], "--export-max") == 0 && i + 1 < argc) {
@@ -641,6 +816,41 @@ int main(int argc, char** argv) {
             return 1;
         }
         std::printf("output:  %s (%zu points)\n", densePath.c_str(), denseCloud.points.size());
+    }
+
+    if (!exportPointsPath.empty()) {
+        if (!denseCloud.points.empty()) std::printf("note: --export-points replaces the --dense points in the export\n");
+        std::string err;
+        if (!readPly(exportPointsPath, denseCloud, err)) {
+            std::fprintf(stderr, "error: %s\n", err.c_str());
+            return 1;
+        }
+        std::printf("points:  %s (%zu points)\n", exportPointsPath.c_str(), denseCloud.points.size());
+        if (!alignToPath.empty()) {
+            vg::PointCloud old;
+            if (!readPly(alignToPath, old, err)) {
+                std::fprintf(stderr, "error: %s\n", err.c_str());
+                return 1;
+            }
+            std::vector<vg::Vec3> src, dst;
+            for (const vg::Point& p : old.points) src.push_back({p.x, p.y, p.z});
+            for (const vg::Point& p : cloud.points) dst.push_back({p.x, p.y, p.z});
+            double fit = 1, inliers = 0;
+            const Similarity T = alignClouds(src, dst, fit, inliers);
+            std::printf("align:   %s onto this map: scale %.4f, rotation %.2f deg, %.0f%% matched, RMS %.2f%% of the "
+                        "scene size\n", alignToPath.c_str(), T.s, vg::rotationAngle(T.R) * 180 / 3.14159265358979,
+                        inliers * 100, fit * 100);
+            if (inliers < 0.5 || fit > 0.02)
+                std::fprintf(stderr, "warning: poor alignment; the runs may have tracked differently (same --config "
+                                     "as the viewer?)\n");
+            for (vg::Point& p : denseCloud.points) {
+                const vg::Vec3 q = T.apply({p.x, p.y, p.z});
+                p.x = static_cast<float>(q.x);
+                p.y = static_cast<float>(q.y);
+                p.z = static_cast<float>(q.z);
+            }
+        }
+        denseCloud.normals.clear();
     }
 
     if (!colmapDir.empty()) {
