@@ -1,0 +1,694 @@
+{
+ "commit": "9454239",
+ "dirty": true,
+ "label": "subpixel-on",
+ "extra_args": [
+  "--gpu"
+ ],
+ "runs": 1,
+ "summary": {
+  "street": {
+   "frames": 708,
+   "lost_frames": 0,
+   "maps": 1,
+   "tracked_per_frame": 370,
+   "keyframes": 188,
+   "points": 12877,
+   "surface_variation": 0.018,
+   "scattered_pct": 8,
+   "noise_median_pct": 1.19,
+   "noise_p90_pct": 4.24,
+   "two_view_pct": 2,
+   "fov": 71.7,
+   "k1": -0.012,
+   "background_passes": 38,
+   "fps": 129.0,
+   "core_fps": 167.8,
+   "video_fps": 25.0,
+   "wall_s": 6.605573654174805,
+   "reference_fov": 72.34832618433929,
+   "reference_k1": -0.02277664308482745,
+   "frame_ms_p50": 1.38,
+   "frame_ms_p99": 25.54,
+   "frame_ms_max": 41.349999999999994,
+   "over_budget_pct": 0.14124293785310735,
+   "worst_latency_ms": 41.349999999998545,
+   "dropped": 0,
+   "budget_ms": 40.0,
+   "final_ate_rms_pct": 0.05059849230602064,
+   "final_ate_rms_pct_range": [
+    0.05059849230602064,
+    0.05059849230602064
+   ],
+   "final_ate_max_pct": 0.1290018653827338,
+   "final_scale_min": 1.0010763809031045,
+   "final_scale_max": 1.0010763809031045,
+   "final_rpe_direction_deg": 0.17563971831966213,
+   "final_rpe_length_ratio": 1.0001631895193062,
+   "live_ate_rms_pct": 1.0881478383446348,
+   "live_ate_rms_pct_range": [
+    1.0881478383446348,
+    1.0881478383446348
+   ],
+   "live_ate_max_pct": 2.101755008969985,
+   "live_scale_min": 1.0349157622641156,
+   "live_scale_max": 1.0349157622641156,
+   "live_rpe_direction_deg": 0.6039113107811473,
+   "live_rpe_length_ratio": 1.0482933234113274,
+   "stage_avg_ms": {
+    "decode*": 2.46,
+    "init": 5.88,
+    "track": 1.28,
+    "kf.ba wait": 3.45,
+    "kf.cull": 0.01,
+    "kf.triangulate": 2.55,
+    "kf.fuse": 5.61,
+    "kf.ba build": 1.04,
+    "mapping": 12.82,
+    "kf.local ba*": 12.23,
+    "kf.ba merge": 0.06,
+    "global ba": 891.76,
+    "all": 7.75
+   }
+  },
+  "family": {
+   "frames": 4393,
+   "lost_frames": 0,
+   "maps": 1,
+   "tracked_per_frame": 363,
+   "keyframes": 777,
+   "points": 41979,
+   "surface_variation": 0.073,
+   "scattered_pct": 34,
+   "noise_median_pct": 1.46,
+   "noise_p90_pct": 5.75,
+   "two_view_pct": 0,
+   "fov": 79.2,
+   "k1": -0.027,
+   "background_passes": 27,
+   "fps": 142.7,
+   "core_fps": 198.4,
+   "video_fps": 29.97,
+   "wall_s": 35.980098247528076,
+   "reference_fov": 79.20526296012925,
+   "reference_k1": -0.028003659493048512,
+   "frame_ms_p50": 1.59,
+   "frame_ms_p99": 22.78,
+   "frame_ms_max": 34.099999999999994,
+   "over_budget_pct": 0.04552697473252902,
+   "worst_latency_ms": 34.100000000000364,
+   "dropped": 0,
+   "budget_ms": 33.366700033366705,
+   "final_ate_rms_pct": 0.18914684596593617,
+   "final_ate_rms_pct_range": [
+    0.18914684596593617,
+    0.18914684596593617
+   ],
+   "final_ate_max_pct": 0.4427538744399227,
+   "final_scale_min": 0.9961783292020232,
+   "final_scale_max": 1.00350978054701,
+   "final_rpe_direction_deg": 0.6093951619840872,
+   "final_rpe_length_ratio": 0.9986412296920119,
+   "live_ate_rms_pct": 0.2612807498967991,
+   "live_ate_rms_pct_range": [
+    0.2612807498967991,
+    0.2612807498967991
+   ],
+   "live_ate_max_pct": 0.8146220262211273,
+   "live_scale_min": 0.9935678963472743,
+   "live_scale_max": 1.0171298303731677,
+   "live_rpe_direction_deg": 0.7358673766871018,
+   "live_rpe_length_ratio": 0.9993887474787178,
+   "stage_avg_ms": {
+    "decode*": 2.6,
+    "init": 5.94,
+    "track": 1.54,
+    "kf.ba wait": 2.77,
+    "kf.cull": 0.01,
+    "kf.triangulate": 2.36,
+    "kf.fuse": 7.02,
+    "kf.ba build": 1.57,
+    "mapping": 13.87,
+    "kf.local ba*": 13.86,
+    "kf.ba merge": 0.12,
+    "kf.focal ba*": 83.0,
+    "global ba": 4063.48,
+    "all": 7.01
+   }
+  },
+  "m60": {
+   "frames": 2878,
+   "lost_frames": 0,
+   "maps": 1,
+   "tracked_per_frame": 504,
+   "keyframes": 766,
+   "points": 57814,
+   "surface_variation": 0.07,
+   "scattered_pct": 33,
+   "noise_median_pct": 1.17,
+   "noise_p90_pct": 4.53,
+   "two_view_pct": 0,
+   "fov": 63.1,
+   "k1": -0.118,
+   "background_passes": 44,
+   "fps": 120.8,
+   "core_fps": 120.3,
+   "video_fps": 23.98,
+   "wall_s": 28.293594360351562,
+   "reference_fov": 63.26864736521978,
+   "reference_k1": -0.11940119876477719,
+   "frame_ms_p50": 1.82,
+   "frame_ms_p99": 30.15,
+   "frame_ms_max": 38.36,
+   "over_budget_pct": 0.0,
+   "worst_latency_ms": 38.36000000000058,
+   "dropped": 0,
+   "budget_ms": 41.70141784820684,
+   "final_ate_rms_pct": 0.5029714874054038,
+   "final_ate_rms_pct_range": [
+    0.5029714874054038,
+    0.5029714874054038
+   ],
+   "final_ate_max_pct": 1.0507078301815087,
+   "final_scale_min": 0.9878860489120005,
+   "final_scale_max": 1.019780647486796,
+   "final_rpe_direction_deg": 0.6132287506070849,
+   "final_rpe_length_ratio": 0.9940123059784164,
+   "live_ate_rms_pct": 0.5111912210990929,
+   "live_ate_rms_pct_range": [
+    0.5111912210990929,
+    0.5111912210990929
+   ],
+   "live_ate_max_pct": 1.202261002991864,
+   "live_scale_min": 0.985507435348851,
+   "live_scale_max": 1.0191163401147108,
+   "live_rpe_direction_deg": 0.6286029378048718,
+   "live_rpe_length_ratio": 1.0019977052653384,
+   "stage_avg_ms": {
+    "decode*": 0.88,
+    "init": 8.67,
+    "track": 1.68,
+    "kf.ba wait": 8.75,
+    "kf.cull": 0.01,
+    "kf.triangulate": 2.24,
+    "kf.fuse": 7.14,
+    "kf.ba build": 1.62,
+    "mapping": 19.97,
+    "kf.local ba*": 16.51,
+    "kf.ba merge": 0.09,
+    "global ba": 3578.93,
+    "all": 8.28
+   }
+  }
+ },
+ "runs_detail": {
+  "street": [
+   {
+    "frames": 708,
+    "lost_frames": 0,
+    "maps": 1,
+    "tracked_per_frame": 370,
+    "keyframes": 188,
+    "points": 12877,
+    "surface_variation": 0.018,
+    "scattered_pct": 8,
+    "noise_median_pct": 1.19,
+    "noise_p90_pct": 4.24,
+    "two_view_pct": 2,
+    "fov": 71.7,
+    "k1": -0.012,
+    "background_passes": 38,
+    "fps": 129.0,
+    "core_fps": 167.8,
+    "video_fps": 25.0,
+    "stages_ms": {
+     "decode*": {
+      "total": 1744.3,
+      "avg": 2.46
+     },
+     "init": {
+      "total": 47.0,
+      "avg": 5.88
+     },
+     "track": {
+      "total": 895.3,
+      "avg": 1.28
+     },
+     "kf.ba wait": {
+      "total": 642.0,
+      "avg": 3.45
+     },
+     "kf.cull": {
+      "total": 0.9,
+      "avg": 0.01
+     },
+     "kf.triangulate": {
+      "total": 474.9,
+      "avg": 2.55
+     },
+     "kf.fuse": {
+      "total": 1042.7,
+      "avg": 5.61
+     },
+     "kf.ba build": {
+      "total": 193.9,
+      "avg": 1.04
+     },
+     "mapping": {
+      "total": 2384.6,
+      "avg": 12.82
+     },
+     "kf.local ba*": {
+      "total": 2274.7,
+      "avg": 12.23
+     },
+     "kf.ba merge": {
+      "total": 10.3,
+      "avg": 0.06
+     },
+     "global ba": {
+      "total": 891.8,
+      "avg": 891.76
+     },
+     "all": {
+      "total": 5489.0,
+      "avg": 7.75
+     }
+    },
+    "wall_s": 6.605573654174805,
+    "exit_code": 0,
+    "frame_ms_p50": 1.38,
+    "frame_ms_p99": 25.54,
+    "frame_ms_max": 41.349999999999994,
+    "over_budget_pct": 0.14124293785310735,
+    "worst_latency_ms": 41.349999999998545,
+    "dropped": 0,
+    "budget_ms": 40.0,
+    "reference_fov": 72.34832618433929,
+    "reference_k1": -0.02277664308482745,
+    "final": {
+     "reference_frames": 141,
+     "our_frames": 188,
+     "common_frames": 141,
+     "ate_rms_pct": 0.05059849230602064,
+     "ate_median_pct": 0.03930638591555828,
+     "ate_max_pct": 0.1290018653827338,
+     "scale_windows": [
+      [
+       0.0,
+       20.0,
+       1.0010763809031045
+      ]
+     ],
+     "scale_min": 1.0010763809031045,
+     "scale_max": 1.0010763809031045,
+     "rpe_direction_deg": 0.17563971831966213,
+     "rpe_length_ratio": 1.0001631895193062,
+     "rpe_length_ratio_p10": 0.9923495159522485,
+     "rpe_length_ratio_p90": 1.0062927958535783
+    },
+    "live": {
+     "reference_frames": 141,
+     "our_frames": 701,
+     "common_frames": 139,
+     "ate_rms_pct": 1.0881478383446348,
+     "ate_median_pct": 0.8372522620185666,
+     "ate_max_pct": 2.101755008969985,
+     "scale_windows": [
+      [
+       0.4,
+       20.4,
+       1.0349157622641156
+      ]
+     ],
+     "scale_min": 1.0349157622641156,
+     "scale_max": 1.0349157622641156,
+     "rpe_direction_deg": 0.6039113107811473,
+     "rpe_length_ratio": 1.0482933234113274,
+     "rpe_length_ratio_p10": 0.838026433175842,
+     "rpe_length_ratio_p90": 1.103336460745022
+    }
+   }
+  ],
+  "family": [
+   {
+    "frames": 4393,
+    "lost_frames": 0,
+    "maps": 1,
+    "tracked_per_frame": 363,
+    "keyframes": 777,
+    "points": 41979,
+    "surface_variation": 0.073,
+    "scattered_pct": 34,
+    "noise_median_pct": 1.46,
+    "noise_p90_pct": 5.75,
+    "two_view_pct": 0,
+    "fov": 79.2,
+    "k1": -0.027,
+    "background_passes": 27,
+    "fps": 142.7,
+    "core_fps": 198.4,
+    "video_fps": 29.97,
+    "stages_ms": {
+     "decode*": {
+      "total": 11403.5,
+      "avg": 2.6
+     },
+     "init": {
+      "total": 790.0,
+      "avg": 5.94
+     },
+     "track": {
+      "total": 6546.3,
+      "avg": 1.54
+     },
+     "kf.ba wait": {
+      "total": 2146.0,
+      "avg": 2.77
+     },
+     "kf.cull": {
+      "total": 3.9,
+      "avg": 0.01
+     },
+     "kf.triangulate": {
+      "total": 1831.8,
+      "avg": 2.36
+     },
+     "kf.fuse": {
+      "total": 5443.3,
+      "avg": 7.02
+     },
+     "kf.ba build": {
+      "total": 1173.6,
+      "avg": 1.57
+     },
+     "mapping": {
+      "total": 10747.3,
+      "avg": 13.87
+     },
+     "kf.local ba*": {
+      "total": 10257.5,
+      "avg": 13.86
+     },
+     "kf.ba merge": {
+      "total": 91.2,
+      "avg": 0.12
+     },
+     "kf.focal ba*": {
+      "total": 747.0,
+      "avg": 83.0
+     },
+     "global ba": {
+      "total": 4063.5,
+      "avg": 4063.48
+     },
+     "all": {
+      "total": 30793.3,
+      "avg": 7.01
+     }
+    },
+    "wall_s": 35.980098247528076,
+    "exit_code": 0,
+    "frame_ms_p50": 1.59,
+    "frame_ms_p99": 22.78,
+    "frame_ms_max": 34.099999999999994,
+    "over_budget_pct": 0.04552697473252902,
+    "worst_latency_ms": 34.100000000000364,
+    "dropped": 0,
+    "budget_ms": 33.366700033366705,
+    "reference_fov": 79.20526296012925,
+    "reference_k1": -0.028003659493048512,
+    "final": {
+     "reference_frames": 293,
+     "our_frames": 777,
+     "common_frames": 283,
+     "ate_rms_pct": 0.18914684596593617,
+     "ate_median_pct": 0.1579358799281789,
+     "ate_max_pct": 0.4427538744399227,
+     "scale_windows": [
+      [
+       4.5042,
+       24.5042,
+       1.00350978054701
+      ],
+      [
+       24.5042,
+       44.5042,
+       0.9973863505045467
+      ],
+      [
+       44.5042,
+       64.5042,
+       0.9961783292020232
+      ],
+      [
+       64.5042,
+       84.5042,
+       0.9974382659769576
+      ],
+      [
+       84.5042,
+       104.5042,
+       1.001290212400264
+      ],
+      [
+       104.5042,
+       124.5042,
+       0.9979748202792554
+      ],
+      [
+       124.5042,
+       144.5042,
+       1.0015279817000067
+      ]
+     ],
+     "scale_min": 0.9961783292020232,
+     "scale_max": 1.00350978054701,
+     "rpe_direction_deg": 0.6093951619840872,
+     "rpe_length_ratio": 0.9986412296920119,
+     "rpe_length_ratio_p10": 0.9829417232916864,
+     "rpe_length_ratio_p90": 1.0068769606931451
+    },
+    "live": {
+     "reference_frames": 293,
+     "our_frames": 4261,
+     "common_frames": 284,
+     "ate_rms_pct": 0.2612807498967991,
+     "ate_median_pct": 0.14714519442563762,
+     "ate_max_pct": 0.8146220262211273,
+     "scale_windows": [
+      [
+       4.505,
+       24.505,
+       1.0171298303731677
+      ],
+      [
+       24.505,
+       44.504999999999995,
+       0.993869877038264
+      ],
+      [
+       44.504999999999995,
+       64.505,
+       0.9935678963472743
+      ],
+      [
+       64.505,
+       84.505,
+       1.000046878247835
+      ],
+      [
+       84.505,
+       104.505,
+       0.9997328058933435
+      ],
+      [
+       104.505,
+       124.505,
+       0.9996714685684885
+      ],
+      [
+       124.505,
+       144.505,
+       1.0045961934383822
+      ]
+     ],
+     "scale_min": 0.9935678963472743,
+     "scale_max": 1.0171298303731677,
+     "rpe_direction_deg": 0.7358673766871018,
+     "rpe_length_ratio": 0.9993887474787178,
+     "rpe_length_ratio_p10": 0.985875197797076,
+     "rpe_length_ratio_p90": 1.0185326516357553
+    }
+   }
+  ],
+  "m60": [
+   {
+    "frames": 2878,
+    "lost_frames": 0,
+    "maps": 1,
+    "tracked_per_frame": 504,
+    "keyframes": 766,
+    "points": 57814,
+    "surface_variation": 0.07,
+    "scattered_pct": 33,
+    "noise_median_pct": 1.17,
+    "noise_p90_pct": 4.53,
+    "two_view_pct": 0,
+    "fov": 63.1,
+    "k1": -0.118,
+    "background_passes": 44,
+    "fps": 120.8,
+    "core_fps": 120.3,
+    "video_fps": 23.98,
+    "stages_ms": {
+     "decode*": {
+      "total": 2523.8,
+      "avg": 0.88
+     },
+     "init": {
+      "total": 312.0,
+      "avg": 8.67
+     },
+     "track": {
+      "total": 4780.2,
+      "avg": 1.68
+     },
+     "kf.ba wait": {
+      "total": 6686.7,
+      "avg": 8.75
+     },
+     "kf.cull": {
+      "total": 4.8,
+      "avg": 0.01
+     },
+     "kf.triangulate": {
+      "total": 1712.9,
+      "avg": 2.24
+     },
+     "kf.fuse": {
+      "total": 5452.7,
+      "avg": 7.14
+     },
+     "kf.ba build": {
+      "total": 1239.0,
+      "avg": 1.62
+     },
+     "mapping": {
+      "total": 15253.4,
+      "avg": 19.97
+     },
+     "kf.local ba*": {
+      "total": 12617.1,
+      "avg": 16.51
+     },
+     "kf.ba merge": {
+      "total": 67.0,
+      "avg": 0.09
+     },
+     "global ba": {
+      "total": 3578.9,
+      "avg": 3578.93
+     },
+     "all": {
+      "total": 23832.5,
+      "avg": 8.28
+     }
+    },
+    "wall_s": 28.293594360351562,
+    "exit_code": 0,
+    "frame_ms_p50": 1.82,
+    "frame_ms_p99": 30.15,
+    "frame_ms_max": 38.36,
+    "over_budget_pct": 0.0,
+    "worst_latency_ms": 38.36000000000058,
+    "dropped": 0,
+    "budget_ms": 41.70141784820684,
+    "reference_fov": 63.26864736521978,
+    "reference_k1": -0.11940119876477719,
+    "final": {
+     "reference_frames": 240,
+     "our_frames": 766,
+     "common_frames": 240,
+     "ate_rms_pct": 0.5029714874054038,
+     "ate_median_pct": 0.3410112428146847,
+     "ate_max_pct": 1.0507078301815087,
+     "scale_windows": [
+      [
+       0.0,
+       20.0,
+       0.9880466030312467
+      ],
+      [
+       20.0,
+       40.0,
+       0.9927179475783489
+      ],
+      [
+       40.0,
+       60.0,
+       0.9878860489120005
+      ],
+      [
+       60.0,
+       80.0,
+       0.9922757705033419
+      ],
+      [
+       80.0,
+       100.0,
+       1.019780647486796
+      ]
+     ],
+     "scale_min": 0.9878860489120005,
+     "scale_max": 1.019780647486796,
+     "rpe_direction_deg": 0.6132287506070849,
+     "rpe_length_ratio": 0.9940123059784164,
+     "rpe_length_ratio_p10": 0.974499873390912,
+     "rpe_length_ratio_p90": 1.023863508236844
+    },
+    "live": {
+     "reference_frames": 240,
+     "our_frames": 2843,
+     "common_frames": 237,
+     "ate_rms_pct": 0.5111912210990929,
+     "ate_median_pct": 0.37051694002303054,
+     "ate_max_pct": 1.202261002991864,
+     "scale_windows": [
+      [
+       1.502,
+       21.502,
+       0.985507435348851
+      ],
+      [
+       21.502,
+       41.501999999999995,
+       0.989367402613871
+      ],
+      [
+       41.501999999999995,
+       61.501999999999995,
+       0.988153037251396
+      ],
+      [
+       61.501999999999995,
+       81.502,
+       0.9962051509317832
+      ],
+      [
+       81.502,
+       101.502,
+       1.0191163401147108
+      ]
+     ],
+     "scale_min": 0.985507435348851,
+     "scale_max": 1.0191163401147108,
+     "rpe_direction_deg": 0.6286029378048718,
+     "rpe_length_ratio": 1.0019977052653384,
+     "rpe_length_ratio_p10": 0.97930267044205,
+     "rpe_length_ratio_p90": 1.0259232031853476
+    }
+   }
+  ]
+ }
+}
