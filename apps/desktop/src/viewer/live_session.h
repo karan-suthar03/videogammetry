@@ -66,6 +66,7 @@ public:
         bool gpu = true;          // extract features on the GPU when there is one (Vulkan)
         bool dense = true;        // dense cloud after the video (DenseReconstructor)
         vg::DenseParams denseParams;
+        bool denseGpu = true;     // depth maps on the GPU when there is one (Vulkan)
     };
 
     // `cameraId` set: reads that camera (CameraReader) and `path` is just its

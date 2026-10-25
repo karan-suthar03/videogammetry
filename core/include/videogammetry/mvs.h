@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "videogammetry/frame.h"
@@ -92,6 +93,13 @@ DepthMap patchMatch(const MvsView& ref, const std::vector<const MvsView*>& sourc
                     double minDepth, double maxDepth, const std::vector<Vec3>& seeds, const DenseParams& params,
                     ThreadPool* pool, const std::atomic<bool>* cancel = nullptr);
 
+// The same computation done elsewhere (e.g. on a GPU, gpu/gpu_mvs.h). Returns
+// false when it cannot (then patchMatch() runs on the CPU instead).
+using DepthMapSolver = std::function<bool(const MvsView& ref, const std::vector<const MvsView*>& sources,
+                                          const PinholeCamera& camera, double minDepth, double maxDepth,
+                                          const std::vector<Vec3>& seeds, const DenseParams& params,
+                                          const std::atomic<bool>* cancel, DepthMap& out)>;
+
 // Dense chunks of points, one per fused keyframe (shared, never changed).
 using DenseCloud = std::vector<std::shared_ptr<const std::vector<Point>>>;
 
@@ -120,6 +128,10 @@ public:
     // aspect of the processed image). It is undistorted and kept.
     void addImage(long frameIndex, const FrameView& rgb);
 
+    // Depth maps by `solver` (named `name` in the progress) instead of the
+    // CPU; a keyframe it fails on is done on the CPU, and so is every later one.
+    void setDepthSolver(DepthMapSolver solver, std::string name);
+
     // Computes and fuses everything; `onUpdate` is called (on this thread)
     // after every depth map and fusion step. Returns false when cancelled.
     bool run(const std::atomic<bool>& cancel, const std::function<void()>& onUpdate = {});
@@ -135,6 +147,7 @@ public:
         int width = 0, height = 0;  // matched image size
         double lastDepthMs = 0;
         bool finished = false;
+        std::string solver = "CPU";  // where the depth maps are computed
     };
     // Any thread.
     Progress progress() const;
@@ -149,6 +162,7 @@ private:
     void checkViews();
 
     DenseParams params_;
+    DepthMapSolver solver_;
     std::vector<View> views_;
     std::vector<long> frames_;
     std::vector<Vec3> mapPoints_;

@@ -1,0 +1,274 @@
+#version 450
+// PatchMatch stereo on one image level, the GPU version of vg::patchMatch
+// (core/src/mvs.cpp, same steps and constants; random numbers differ). The
+// push constant `mode` selects the step:
+//   0 random init, 1 init from the coarser level, 2 seeds,
+//   3 one checkerboard color of a propagation round, 4 final filter.
+// Images are float gray levels, every image of one level the same size.
+// State: 5 floats per pixel (depth, normal xyz in the reference camera, cost).
+layout(local_size_x = 16, local_size_y = 8) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Images { float img[]; };
+layout(std430, set = 0, binding = 1) buffer State { float st[]; };
+layout(std430, set = 0, binding = 2) readonly buffer Geo { float geo[]; };   // per source: A[9], b[3]
+layout(std430, set = 0, binding = 3) readonly buffer Info { int info[]; };   // ref offset, then source offsets
+layout(std430, set = 0, binding = 4) readonly buffer Seeds { float seeds[]; }; // x, y, depth per seed
+
+layout(push_constant) uniform P {
+    int mode, width, height, round;
+    int color, sources, bestViews, prevWidth;
+    int prevHeight, seedCount, infoBase, geoBase;
+    int stateBase, prevBase;
+    float fx, fy, cx, cy;
+    float minDepth, maxDepth, scale, minPatchStd;
+    float maxCost;
+} pc;
+
+const float kBadCost = 2.0;
+const int kPatchRadius = 5;
+const int kPatchSamples = 36;
+const float kSigmaColor = 8.0;
+const float kSigmaSpatial = 5.0;
+const int kMaxSources = 16;
+const float kPi = 3.14159265358979;
+
+float a[kPatchSamples];
+float w[kPatchSamples];
+float sumW, meanA, varA;
+bool textured;
+
+vec3 ray(int x, int y) { return vec3((float(x) - pc.cx) / pc.fx, (float(y) - pc.cy) / pc.fy, 1.0); }
+
+void refPatch(int x, int y) {
+    const int ref = info[pc.infoBase];
+    const float center = img[ref + y * pc.width + x];
+    float sw = 0, sa = 0, saa = 0;
+    int i = 0;
+    for (int dy = -kPatchRadius; dy <= kPatchRadius; dy += 2) {
+        const int yy = clamp(y + dy, 0, pc.height - 1);
+        for (int dx = -kPatchRadius; dx <= kPatchRadius; dx += 2, ++i) {
+            const int xx = clamp(x + dx, 0, pc.width - 1);
+            const float v = img[ref + yy * pc.width + xx];
+            const float wt = exp(-abs(v - center) / kSigmaColor - float(dx * dx + dy * dy) / (2 * kSigmaSpatial * kSigmaSpatial));
+            a[i] = v;
+            w[i] = wt;
+            sw += wt;
+            sa += wt * v;
+            saa += wt * v * v;
+        }
+    }
+    sumW = sw;
+    meanA = sa / sw;
+    varA = max(0.0, saa / sw - meanA * meanA);
+    textured = sqrt(varA) >= pc.minPatchStd;
+}
+
+bool sampleSource(int s, float u, float v, out float val) {
+    val = 0;
+    if (!(u >= 0 && v >= 0 && u < float(pc.width - 1) && v < float(pc.height - 1))) return false;
+    const int x = int(u), y = int(v);
+    const float ax = u - float(x), ay = v - float(y);
+    const int p = info[pc.infoBase + 1 + s] + y * pc.width + x;
+    val = mix(mix(img[p], img[p + 1], ax), mix(img[p + pc.width], img[p + pc.width + 1], ax), ay);
+    return true;
+}
+
+// 1 - NCC of the plane (depth d, normal n) at (x, y), over the best views.
+float evaluate(int x, int y, float d, vec3 n) {
+    const vec3 r = ray(x, y);
+    const float denom = dot(n, r);
+    if (denom >= -1e-6 || !(d > 0)) return kBadCost;
+    const float q = d * denom;
+    const float m0 = n.x / pc.fx / q, m1 = n.y / pc.fy / q;
+    const float m2 = (n.z - pc.cx * n.x / pc.fx - pc.cy * n.y / pc.fy) / q;
+    float costs[kMaxSources];
+    int count = 0;
+    for (int s = 0; s < pc.sources; ++s) {
+        const int g = pc.geoBase + s * 12;
+        float sb = 0, sbb = 0, sab = 0;
+        bool inside = true;
+        int i = 0;
+        for (int dy = -kPatchRadius; dy <= kPatchRadius && inside; dy += 2) {
+            const float v = float(y + dy);
+            for (int dx = -kPatchRadius; dx <= kPatchRadius; dx += 2, ++i) {
+                const float u = float(x + dx);
+                const float mp = m0 * u + m1 * v + m2;
+                const float hz = geo[g + 6] * u + geo[g + 7] * v + geo[g + 8] + geo[g + 11] * mp;
+                if (hz <= 1e-6) {
+                    inside = false;
+                    break;
+                }
+                const float hx = geo[g + 0] * u + geo[g + 1] * v + geo[g + 2] + geo[g + 9] * mp;
+                const float hy = geo[g + 3] * u + geo[g + 4] * v + geo[g + 5] + geo[g + 10] * mp;
+                float b;
+                if (!sampleSource(s, hx / hz, hy / hz, b)) {
+                    inside = false;
+                    break;
+                }
+                sb += w[i] * b;
+                sbb += w[i] * b * b;
+                sab += w[i] * a[i] * b;
+            }
+        }
+        if (!inside) continue;
+        const float mb = sb / sumW;
+        const float varB = sbb / sumW - mb * mb;
+        const float cov = sab / sumW - meanA * mb;
+        float c = 1.0;
+        if (varB >= 1e-3 && varA >= 1e-3) c = 1.0 - clamp(cov / sqrt(varA * varB), -1.0, 1.0);
+        // Insertion: costs stay sorted.
+        int j = count++;
+        while (j > 0 && costs[j - 1] > c) {
+            costs[j] = costs[j - 1];
+            --j;
+        }
+        costs[j] = c;
+    }
+    if (count == 0) return kBadCost;
+    const int k = min(count, max(1, pc.bestViews));
+    float sum = 0;
+    for (int i = 0; i < k; ++i) sum += costs[i];
+    return sum / float(k);
+}
+
+uint hash(uint x) {
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+float random01(inout uint state) {
+    state = hash(state + 0x9E3779B9u);
+    return float(state >> 8) * (1.0 / 16777216.0);
+}
+
+uint seedOf(int x, int y, int r) {
+    return hash(uint(y) * 73856093u ^ uint(x) * 19349663u ^ uint(r + 3) * 83492791u ^ (uint(pc.width) << 20));
+}
+
+vec3 randomUnit(inout uint rng) {
+    const float z = 2 * random01(rng) - 1, phi = 2 * kPi * random01(rng);
+    const float r = sqrt(max(0.0, 1 - z * z));
+    return vec3(r * cos(phi), r * sin(phi), z);
+}
+
+vec3 facing(vec3 n, vec3 r) {
+    if (dot(n, r) > 0) n = -n;
+    for (int i = 0; i < 4 && dot(n, r) > -0.17; ++i) n = normalize(n - r * 0.5);
+    return n;
+}
+
+float randomDepth(inout uint rng) {
+    const float lo = 1 / pc.maxDepth, hi = 1 / pc.minDepth;
+    return 1 / (lo + (hi - lo) * random01(rng));
+}
+
+int at(int x, int y) { return pc.stateBase + (y * pc.width + x) * 5; }
+
+void store(int i, float d, vec3 n, float c) {
+    st[i] = d;
+    st[i + 1] = n.x;
+    st[i + 2] = n.y;
+    st[i + 3] = n.z;
+    st[i + 4] = c;
+}
+
+void step(int x, int y) {
+    const int i = at(x, y);
+    refPatch(x, y);
+    if (!textured) return;
+    float bestD = st[i];
+    vec3 bestN = vec3(st[i + 1], st[i + 2], st[i + 3]);
+    float best = st[i + 4];
+    const vec3 r = ray(x, y);
+    const ivec2 offsets[8] = ivec2[8](ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1), ivec2(-5, 0), ivec2(5, 0),
+                                      ivec2(0, -5), ivec2(0, 5));
+    for (int k = 0; k < 8; ++k) {
+        const int xn = x + offsets[k].x, yn = y + offsets[k].y;
+        if (xn < 0 || yn < 0 || xn >= pc.width || yn >= pc.height) continue;
+        const int j = at(xn, yn);
+        const float dn = st[j];
+        if (dn <= 0 || st[j + 4] >= kBadCost) continue;
+        const vec3 n = vec3(st[j + 1], st[j + 2], st[j + 3]);
+        const float denom = dot(n, r);
+        if (denom >= -1e-6) continue;
+        const float d = dot(n, ray(xn, yn) * dn) / denom;
+        if (!(d >= pc.minDepth && d <= pc.maxDepth)) continue;
+        const float c = evaluate(x, y, d, n);
+        if (c < best) {
+            best = c;
+            bestD = d;
+            bestN = n;
+        }
+    }
+    uint rng = seedOf(x, y, pc.round);
+    const vec3 rn = normalize(r);
+    for (int k = 0; k < 3; ++k) {
+        float d;
+        vec3 n;
+        if (k == 0) {
+            d = randomDepth(rng);
+            n = facing(randomUnit(rng), rn);
+        } else if (k == 1) {
+            d = bestD;
+            n = facing(normalize(bestN + randomUnit(rng) * (0.6 * pc.scale)), rn);
+        } else {
+            d = bestD * (1 + 0.1 * pc.scale * (2 * random01(rng) - 1));
+            n = facing(normalize(bestN + randomUnit(rng) * (0.2 * pc.scale)), rn);
+        }
+        if (!(d >= pc.minDepth && d <= pc.maxDepth)) continue;
+        const float c = evaluate(x, y, d, n);
+        if (c < best) {
+            best = c;
+            bestD = d;
+            bestN = n;
+        }
+    }
+    store(i, bestD, bestN, best);
+}
+
+void main() {
+    if (pc.mode == 2) {  // seeds: one invocation each
+        const int s = int(gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x);
+        if (gl_GlobalInvocationID.y > 0 || s >= pc.seedCount) return;
+        const int x = int(seeds[s * 3]), y = int(seeds[s * 3 + 1]);
+        const float d = seeds[s * 3 + 2];
+        const vec3 n = -normalize(ray(x, y));
+        refPatch(x, y);
+        const float c = evaluate(x, y, d, n);
+        const int i = at(x, y);
+        if (c < st[i + 4]) store(i, d, n, c);
+        return;
+    }
+    int x = int(gl_GlobalInvocationID.x);
+    const int y = int(gl_GlobalInvocationID.y);
+    if (pc.mode == 3) x = 2 * x + ((y + pc.color) & 1);
+    if (x >= pc.width || y >= pc.height) return;
+    const int i = at(x, y);
+    if (pc.mode == 0 || pc.mode == 1) {
+        uint rng = seedOf(x, y, pc.mode == 0 ? -1 : -2);
+        float d = 0;
+        vec3 n;
+        if (pc.mode == 1) {
+            const int px = min(x / 2, pc.prevWidth - 1), py = min(y / 2, pc.prevHeight - 1);
+            const int j = pc.prevBase + (py * pc.prevWidth + px) * 5;
+            d = st[j];
+            n = vec3(st[j + 1], st[j + 2], st[j + 3]);
+        }
+        if (!(d > 0)) {
+            d = randomDepth(rng);
+            n = facing(randomUnit(rng), normalize(ray(x, y)));
+        }
+        refPatch(x, y);
+        store(i, d, n, evaluate(x, y, d, n));
+    } else if (pc.mode == 3) {
+        step(x, y);
+    } else if (pc.mode == 4) {
+        refPatch(x, y);
+        const float d = st[i];
+        if (!textured || st[i + 4] > pc.maxCost || d < pc.minDepth || d > pc.maxDepth) st[i] = 0;
+    }
+}

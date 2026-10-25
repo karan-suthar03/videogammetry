@@ -7,6 +7,7 @@ include(${PROJECT_SOURCE_DIR}/cmake/Vulkan.cmake)
 add_library(videogammetry_gpu STATIC
     src/vulkan_context.cpp
     src/gpu_orb.cpp
+    src/gpu_mvs.cpp
 )
 add_library(videogammetry::gpu ALIAS videogammetry_gpu)
 
@@ -24,6 +25,7 @@ vg_add_shaders(videogammetry_gpu
     shaders/fast_cells.comp
     shaders/fast_collect.comp
     shaders/describe.comp
+    shaders/patch_match.comp
 )
 
 if(MSVC)

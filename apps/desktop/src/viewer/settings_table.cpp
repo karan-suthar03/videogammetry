@@ -23,6 +23,7 @@ std::vector<SettingEntry> settingEntries(ViewerSettings& s) {
         {"Playback", "showDense", "Show dense cloud", "", &s.render.showDense, 0, 1, 1},
         {"Processing", "gpu", "Extract features on the GPU", "Vulkan; CPU if none", &s.session.gpu, 0, 1, 1},
         {"Dense", "dense", "Dense cloud after the video", "", &s.session.dense, 0, 1, 1},
+        {"Dense", "denseGpu", "Dense depth maps on the GPU", "Vulkan; CPU if none", &s.session.denseGpu, 0, 1, 1},
         {"Dense", "denseImageSize", "Dense image size", "px, long side; 0 = the video's", &s.session.denseParams.imageSize, 0, kInf, 160},
         {"Dense", "denseMaxMemoryMB", "Dense memory limit", "MB; lowers the image size", &s.session.denseParams.maxMemoryMB, 256, kInf, 512},
         {"Dense", "denseSourceViews", "Dense views per keyframe", "2..16", &s.session.denseParams.sourceViews, 2, 16, 1},

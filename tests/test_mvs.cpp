@@ -4,16 +4,22 @@
 //  1. Most pixels get a depth, and nearly all of them within 1% of the truth.
 //  2. The normals match the plane's.
 //  3. Multi-threaded result identical to single-threaded.
+//  4. With a GPU: the same accuracy there, and depths close to the CPU's.
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <random>
+#include <string>
 #include <vector>
 
 #include "videogammetry/linalg.h"
 #include "videogammetry/mvs.h"
 #include "videogammetry/thread_pool.h"
+
+#ifdef VG_HAS_GPU
+#include "videogammetry/gpu/gpu_mvs.h"
+#endif
 
 namespace {
 
@@ -95,6 +101,33 @@ vg::MvsView render(const vg::Pose& pose, const Plane& plane, const Texture& tex)
     return view;
 }
 
+void checkAccuracy(const vg::DepthMap& dm, const vg::MvsView& ref, const Plane& plane, const char* where) {
+    std::printf(" %s:\n", where);
+    std::vector<double> errors, angles;
+    const vg::Vec3 nCam = ref.pose.R * plane.n;  // facing the camera: n . ray < 0
+    const vg::Vec3 nTrue = nCam.z < 0 ? nCam : -nCam;
+    for (int y = 0; y < kHeight; ++y)
+        for (int x = 0; x < kWidth; ++x) {
+            const std::size_t i = static_cast<std::size_t>(y) * kWidth + x;
+            if (dm.depth[i] <= 0) continue;
+            const vg::Vec3 r{(x - kCamera.cx) / kCamera.fx, (y - kCamera.cy) / kCamera.fy, 1};
+            const double truth = plane.c / vg::dot(plane.n, r);  // reference camera at the origin, no rotation
+            errors.push_back(std::abs(dm.depth[i] - truth) / truth);
+            angles.push_back(std::acos(std::clamp(vg::dot(dm.normal[i], nTrue), -1.0, 1.0)) * 180 / kPi);
+        }
+    const double valid = double(errors.size()) / (kWidth * kHeight);
+    check(valid > 0.7, "fraction of pixels with a depth", valid);
+    const double within1 = errors.empty() ? 0 : double(std::count_if(errors.begin(), errors.end(), [](double e) { return e < 0.01; })) / errors.size();
+    check(within1 > 0.95, "fraction of those within 1% of the true depth", within1);
+    std::vector<double> sorted = errors;
+    std::sort(sorted.begin(), sorted.end());
+    const double median = sorted.empty() ? 1 : sorted[sorted.size() / 2];
+    check(median < 0.003, "median relative depth error", median);
+    std::sort(angles.begin(), angles.end());
+    const double medianAngle = angles.empty() ? 180 : angles[angles.size() / 2];
+    check(medianAngle < 8, "median normal error, degrees", medianAngle);
+}
+
 }  // namespace
 
 int main() {
@@ -121,32 +154,32 @@ int main() {
     std::printf("PatchMatch on a plane slanted 50 degrees (%dx%d, %zu sources):\n", kWidth, kHeight, sources.size());
     const vg::DepthMap dm = vg::patchMatch(ref, sources, kCamera, 2.0, 20.0, seeds, params, &pool);
 
-    std::vector<double> errors, angles;
-    const vg::Vec3 nCam = ref.pose.R * plane.n;  // facing the camera: n . ray < 0
-    const vg::Vec3 nTrue = nCam.z < 0 ? nCam : -nCam;
-    for (int y = 0; y < kHeight; ++y)
-        for (int x = 0; x < kWidth; ++x) {
-            const std::size_t i = static_cast<std::size_t>(y) * kWidth + x;
-            if (dm.depth[i] <= 0) continue;
-            const vg::Vec3 r{(x - kCamera.cx) / kCamera.fx, (y - kCamera.cy) / kCamera.fy, 1};
-            const double truth = plane.c / vg::dot(plane.n, r);  // reference camera at the origin, no rotation
-            errors.push_back(std::abs(dm.depth[i] - truth) / truth);
-            angles.push_back(std::acos(std::clamp(vg::dot(dm.normal[i], nTrue), -1.0, 1.0)) * 180 / kPi);
-        }
-    const double valid = double(errors.size()) / (kWidth * kHeight);
-    check(valid > 0.7, "fraction of pixels with a depth", valid);
-    const double within1 = errors.empty() ? 0 : double(std::count_if(errors.begin(), errors.end(), [](double e) { return e < 0.01; })) / errors.size();
-    check(within1 > 0.95, "fraction of those within 1% of the true depth", within1);
-    std::vector<double> sorted = errors;
-    std::sort(sorted.begin(), sorted.end());
-    const double median = sorted.empty() ? 1 : sorted[sorted.size() / 2];
-    check(median < 0.003, "median relative depth error", median);
-    std::sort(angles.begin(), angles.end());
-    const double medianAngle = angles.empty() ? 180 : angles[angles.size() / 2];
-    check(medianAngle < 8, "median normal error, degrees", medianAngle);
+    checkAccuracy(dm, ref, plane, "CPU");
 
     const vg::DepthMap single = vg::patchMatch(ref, sources, kCamera, 2.0, 20.0, seeds, params, nullptr);
     check(single.depth == dm.depth, "single-threaded result identical", 0);
+
+#ifdef VG_HAS_GPU
+    std::string device;
+    const vg::DepthMapSolver gpu = vg::gpu::makeGpuDepthSolver(device);
+    std::printf("GPU: %s\n", device.c_str());
+    if (gpu) {
+        vg::DepthMap g;
+        const bool ok = gpu(ref, sources, kCamera, 2.0, 20.0, seeds, params, nullptr, g);
+        check(ok, "GPU solver ran", 0);
+        if (ok) {
+            checkAccuracy(g, ref, plane, "GPU");
+            long both = 0, close = 0;
+            for (std::size_t i = 0; i < g.depth.size(); ++i) {
+                if (g.depth[i] <= 0 || dm.depth[i] <= 0) continue;
+                ++both;
+                close += std::abs(g.depth[i] - dm.depth[i]) < 0.01 * dm.depth[i];
+            }
+            const double agree = both ? double(close) / both : 0;
+            check(agree > 0.95, "GPU depths within 1% of the CPU's", agree);
+        }
+    }
+#endif
 
     std::printf("%s\n", failures == 0 ? "all passed" : "FAILED");
     return failures == 0 ? 0 : 1;

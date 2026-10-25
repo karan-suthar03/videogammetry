@@ -135,6 +135,12 @@ const char* settingDetails(const char* key) {
          "order and shows the cloud growing along the path; the green status line shows its progress. S saves it "
          "as <name>_dense.ply next to the sparse cloud, with normals. Off stops after the sparse map. Takes from "
          "minutes to much longer at full resolution; closing or opening another video stops it."},
+        {"denseGpu",
+         "Computes the depth maps (the slow part of the dense stage) on the graphics card through Vulkan: the same "
+         "search with the same settings, many times faster than the CPU, so full resolution, more views or more "
+         "rounds become practical. Results match the CPU's closely but not bit for bit (other random numbers, "
+         "float rounding). Without a usable GPU, or if it fails (e.g. out of graphics memory), the CPU takes "
+         "over; the dense status line shows which one is used. Fusing stays on the CPU."},
         {"denseImageSize",
          "Long side, in pixels, of the keyframe images the dense stage matches; 0 uses the video's own size. Larger "
          "finds finer detail and many more points (one candidate per pixel), but time and memory grow with the "

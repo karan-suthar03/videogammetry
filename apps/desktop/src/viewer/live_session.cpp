@@ -1,6 +1,7 @@
 #include "live_session.h"
 
 #ifdef VG_HAS_GPU
+#include "videogammetry/gpu/gpu_mvs.h"
 #include "videogammetry/gpu/gpu_orb.h"
 #endif
 
@@ -228,6 +229,13 @@ void LiveSession::run() {
 void LiveSession::runDense(double processingFps, const std::string& summary) {
     if (reconstructor_->keyframes().size() < 3) return;
     auto dense = std::make_shared<vg::DenseReconstructor>(*reconstructor_, settings_.denseParams);
+#ifdef VG_HAS_GPU
+    if (settings_.denseGpu) {
+        std::string device;
+        vg::DepthMapSolver solver = vg::gpu::makeGpuDepthSolver(device);
+        dense->setDepthSolver(std::move(solver), device);
+    }
+#endif
     const auto status = [&](const std::string& text) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -277,12 +285,13 @@ void LiveSession::runDense(double processingFps, const std::string& summary) {
         if (!p.finished && Clock::now() - lastStatus < std::chrono::milliseconds(200)) return;
         lastStatus = Clock::now();
         if (p.finished) {
-            std::snprintf(buf, sizeof(buf), "dense: done, %.2f M points from %d keyframes (kept %d of %d)   %dx%d",
-                          p.points / 1e6, p.references, p.selected, p.totalKeyframes, p.width, p.height);
+            std::snprintf(buf, sizeof(buf), "dense: done, %.2f M points from %d keyframes (kept %d of %d)   %dx%d   %s",
+                          p.points / 1e6, p.references, p.selected, p.totalKeyframes, p.width, p.height,
+                          p.solver.c_str());
         } else {
-            std::snprintf(buf, sizeof(buf), "dense: depth maps %d / %d (kept %d of %d keyframes)   last %.1f s"
-                          "   %.2f M points   %dx%d", p.depthMaps, p.references, p.selected, p.totalKeyframes,
-                          p.lastDepthMs / 1000, p.points / 1e6, p.width, p.height);
+            std::snprintf(buf, sizeof(buf), "dense: depth maps %d / %d (kept %d of %d keyframes)   last %.2f s"
+                          "   %.2f M points   %dx%d   %s", p.depthMaps, p.references, p.selected, p.totalKeyframes,
+                          p.lastDepthMs / 1000, p.points / 1e6, p.width, p.height, p.solver.c_str());
         }
         status(buf);
     };

@@ -591,6 +591,12 @@ DenseReconstructor::DenseReconstructor(const Reconstructor& r, const DenseParams
 
 DenseReconstructor::~DenseReconstructor() = default;
 
+void DenseReconstructor::setDepthSolver(DepthMapSolver solver, std::string name) {
+    solver_ = std::move(solver);
+    std::lock_guard<std::mutex> lock(mutex_);
+    progress_.solver = name.empty() ? "CPU" : std::move(name);
+}
+
 int DenseReconstructor::imageLongSide(int videoWidth, int videoHeight) const {
     const int native = std::max(videoWidth, videoHeight);
     double side = params_.imageSize > 0 ? std::min(params_.imageSize, native) : native;
@@ -686,7 +692,14 @@ void DenseReconstructor::computeDepth(int index, ThreadPool& pool, const std::at
     if (sources.size() < 2) return;
     std::vector<Vec3> seeds;
     for (int id : view.points) seeds.push_back(mapPoints_[static_cast<std::size_t>(id)]);
-    const DepthMap dm = patchMatch(view.mvs, sources, camera_, view.minDepth, view.maxDepth, seeds, params_, &pool, &cancel);
+    DepthMap dm;
+    if (solver_ && !solver_(view.mvs, sources, camera_, view.minDepth, view.maxDepth, seeds, params_, &cancel, dm)) {
+        if (cancel) return;
+        solver_ = {};
+        std::lock_guard<std::mutex> lock(mutex_);
+        progress_.solver += " failed, now CPU";
+    }
+    if (!solver_) dm = patchMatch(view.mvs, sources, camera_, view.minDepth, view.maxDepth, seeds, params_, &pool, &cancel);
     if (cancel) return;
     const std::size_t n = dm.depth.size();
     view.depth.assign(n, 0);
