@@ -62,6 +62,16 @@ bool LiveSession::savePly(const std::string& path, std::size_t& pointsWritten) c
     if (!done_ || !reconstructor_) return false;
     const vg::PointCloud cloud = reconstructor_->pointCloud();
     pointsWritten = cloud.points.size();
+    std::shared_ptr<vg::DenseReconstructor> dense;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        dense = dense_;
+    }
+    if (dense) {
+        std::string densePath = path;
+        if (densePath.size() > 4 && densePath.ends_with(".ply")) densePath.resize(densePath.size() - 4);
+        vg::writePly(dense->pointCloud(), densePath + "_dense.ply");
+    }
     return vg::writePly(cloud, path);
 }
 
@@ -178,6 +188,13 @@ void LiveSession::run() {
             publish(&frame, processingFps, false, {});
             lastPublish = now;
         }
+        if (settings_.dense && camera() && reconstructor_->lastWasKeyframe()) {  // after publish: the pixels are handed over
+            std::vector<std::uint8_t> pixels = pipeline.takePixels();
+            if (!pixels.empty()) {
+                const vg::FrameView view = frame;  // points into `pixels`, which keeps its buffer when moved
+                keyframeImages_[reconstructor_->keyframes().back().frameIndex] = {std::move(pixels), view};
+            }
+        }
     }
     feeder.join();
     {
@@ -205,6 +222,71 @@ void LiveSession::run() {
     }
     publish(nullptr, processingFps, true, summary);
     done_ = true;
+    if (settings_.dense && !stop_) runDense(processingFps, summary);
+}
+
+void LiveSession::runDense(double processingFps, const std::string& summary) {
+    if (reconstructor_->keyframes().size() < 3) return;
+    auto dense = std::make_shared<vg::DenseReconstructor>(*reconstructor_, settings_.denseParams);
+    const auto status = [&](const std::string& text) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            denseStatus_ = text;
+        }
+        publish(nullptr, processingFps, true, summary);
+    };
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        dense_ = dense;
+    }
+
+    // Keyframe images: kept from the capture, or decoded again from the video.
+    const std::vector<long>& needed = dense->frames();
+    char buf[256];
+    if (camera()) {
+        for (const auto& [index, image] : keyframeImages_) dense->addImage(index, image.second);
+        keyframeImages_.clear();
+    } else {
+        VideoReader reader;
+        std::string error;
+        if (!reader.open(path_, error)) {
+            status("dense: " + error);
+            return;
+        }
+        reader.setMaxSize(dense->imageLongSide(reader.info().width, reader.info().height));
+        std::size_t next = 0;
+        vg::FrameView frame;
+        Clock::time_point lastStatus;
+        for (long index = 0; next < needed.size() && !stop_ && reader.read(frame); ++index) {
+            if (index != needed[next]) continue;
+            dense->addImage(index, frame);
+            ++next;
+            if (Clock::now() - lastStatus >= std::chrono::milliseconds(200)) {
+                std::snprintf(buf, sizeof(buf), "dense: reading keyframe images %zu / %zu", next, needed.size());
+                status(buf);
+                lastStatus = Clock::now();
+            }
+        }
+    }
+    if (stop_) return;
+
+    Clock::time_point lastStatus;
+    const auto update = [&]() {
+        const vg::DenseReconstructor::Progress p = dense->progress();
+        if (!p.finished && Clock::now() - lastStatus < std::chrono::milliseconds(200)) return;
+        lastStatus = Clock::now();
+        if (p.finished) {
+            std::snprintf(buf, sizeof(buf), "dense: done, %.2f M points from %d keyframes (%dx%d)", p.points / 1e6,
+                          p.keyframes, p.width, p.height);
+        } else {
+            std::snprintf(buf, sizeof(buf), "dense: depth maps %d / %d (last %.1f s)   fused %d   %.2f M points   %dx%d",
+                          p.depthMaps, static_cast<int>(needed.size()), p.lastDepthMs / 1000, p.fused, p.points / 1e6,
+                          p.width, p.height);
+        }
+        status(buf);
+    };
+    status("dense: starting");
+    dense->run(stop_, update);
 }
 
 void LiveSession::publish(const vg::FrameView* frame, double processingFps, bool finished,
@@ -282,6 +364,8 @@ void LiveSession::publish(const vg::FrameView* frame, double processingFps, bool
     s->processingFps = processingFps;
 
     std::lock_guard<std::mutex> lock(mutex_);
+    if (dense_) s->dense = dense_->cloud();
+    s->denseStatus = denseStatus_;
     s->version = ++version_;
     snapshot_ = std::move(s);
 }

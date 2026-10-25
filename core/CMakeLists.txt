@@ -12,6 +12,7 @@ add_library(videogammetry_core STATIC
     src/linalg.cpp
     src/map_quality.cpp
     src/matcher.cpp
+    src/mvs.cpp
     src/orb.cpp
     src/pnp.cpp
     src/point_cloud.cpp

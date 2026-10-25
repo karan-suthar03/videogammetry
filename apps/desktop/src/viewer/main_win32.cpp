@@ -282,6 +282,7 @@ void drawHud(HDC dc) {
             line(buf, s.focalUpdates > 0 ? RGB(150, 230, 150) : dim);
         }
         if (!s.message.empty()) line(fromUtf8(s.message), RGB(255, 210, 120));
+        if (!s.denseStatus.empty()) line(fromUtf8(s.denseStatus), RGB(150, 230, 150));
         if (!g.notice.empty()) line(g.notice, RGB(140, 220, 255));
     }
 

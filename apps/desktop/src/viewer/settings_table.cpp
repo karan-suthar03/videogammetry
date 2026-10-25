@@ -21,6 +21,16 @@ std::vector<SettingEntry> settingEntries(ViewerSettings& s) {
         {"Playback", "showKeyframes", "Show keyframes", "", &s.render.showKeyframes, 0, 1, 1},
         {"Playback", "showDense", "Show dense cloud", "", &s.render.showDense, 0, 1, 1},
         {"Processing", "gpu", "Extract features on the GPU", "Vulkan; CPU if none", &s.session.gpu, 0, 1, 1},
+        {"Dense", "dense", "Dense cloud after the video", "", &s.session.dense, 0, 1, 1},
+        {"Dense", "denseImageSize", "Dense image size", "px, long side; 0 = the video's", &s.session.denseParams.imageSize, 0, kInf, 160},
+        {"Dense", "denseMaxMemoryMB", "Dense memory limit", "MB; lowers the image size", &s.session.denseParams.maxMemoryMB, 256, kInf, 512},
+        {"Dense", "denseSourceViews", "Dense views per keyframe", "2..16", &s.session.denseParams.sourceViews, 2, 16, 1},
+        {"Dense", "denseScales", "Dense image levels", "coarse to fine", &s.session.denseParams.scales, 1, 6, 1},
+        {"Dense", "denseIterations", "Dense rounds, coarsest level", "", &s.session.denseParams.iterations, 1, kInf, 1},
+        {"Dense", "denseFineIterations", "Dense rounds, finer levels", "", &s.session.denseParams.fineIterations, 0, kInf, 1},
+        {"Dense", "denseMinNcc", "Dense match threshold", "NCC, -1..1", &s.session.denseParams.minNcc, -1, 1, 0.05},
+        {"Dense", "denseMinViews", "Dense agreeing views", "besides the keyframe", &s.session.denseParams.minConsistentViews, 1, 16, 1},
+        {"Dense", "denseThreads", "Dense threads", "0 = all", &s.session.denseParams.threads, 0, kInf, 1},
     };
     // clang-format on
     const std::vector<SettingEntry> options = optionEntries(s.session.options);

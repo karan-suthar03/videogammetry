@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <map>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -10,6 +11,7 @@
 
 #include "image_io.h"
 #include "videogammetry/linalg.h"
+#include "videogammetry/mvs.h"
 #include "videogammetry/point_cloud.h"
 #include "videogammetry/reconstructor.h"
 
@@ -34,7 +36,8 @@ struct LiveSnapshot {
     int focalUpdates = 0;
     double k1 = 0;  // radial distortion estimate
 
-    std::shared_ptr<const std::vector<vg::Point>> dense;  // dense cloud (may be null)
+    std::shared_ptr<const vg::DenseCloud> dense;  // dense cloud so far (may be null)
+    std::string denseStatus;  // progress of the dense stage ("" = not running)
 
     RgbImage thumbnail;  // current video frame with tracked keypoints drawn
 
@@ -61,6 +64,8 @@ public:
         bool realTime = false;  // pace to the video's frame rate (default: as fast as possible)
         int thumbnailSize = 420;  // long side of the video thumbnail, pixels
         bool gpu = true;          // extract features on the GPU when there is one (Vulkan)
+        bool dense = true;        // dense cloud after the video (DenseReconstructor)
+        vg::DenseParams denseParams;
     };
 
     // `cameraId` set: reads that camera (CameraReader) and `path` is just its
@@ -87,12 +92,14 @@ public:
 
     // True once the video is done and the final map is ready.
     bool finished() const { return done_; }
-    // Writes the final point cloud; only valid when finished().
+    // Writes the final point cloud, and the dense cloud so far next to it
+    // (<name>_dense.ply); only valid when finished().
     bool savePly(const std::string& path, std::size_t& pointsWritten) const;
 
 private:
     void run();
     void publish(const vg::FrameView* frame, double processingFps, bool finished, const std::string& message);
+    void runDense(double processingFps, const std::string& summary);
 
     std::string path_;
     Settings settings_;
@@ -100,6 +107,8 @@ private:
     std::mutex cameraMutex_;
     CameraReader* camera_ = nullptr;  // while capturing
     std::unique_ptr<vg::Reconstructor> reconstructor_;
+    // Camera: keyframe images kept during the capture (a video is decoded again).
+    std::map<long, std::pair<std::vector<std::uint8_t>, vg::FrameView>> keyframeImages_;
 
     std::atomic<bool> stop_{false}, endCapture_{false}, paused_{false}, realTime_{false}, done_{false};
     long frame_ = 0, frameCount_ = 0;
@@ -110,6 +119,8 @@ private:
     long version_ = 0;
     RgbImage thumbnail_;  // last frame's, kept for snapshots after the video ends
     std::string extractor_;
+    std::shared_ptr<vg::DenseReconstructor> dense_;  // guarded by mutex_
+    std::string denseStatus_;                        // guarded by mutex_
 
     std::thread thread_;
 };

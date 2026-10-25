@@ -200,12 +200,13 @@ void SceneRenderer::render(const LiveSnapshot& scene, const OrbitView& view, con
         }
     };
     if (options.showDense && scene.dense) {
-        for (const vg::Point& p : *scene.dense) {
-            const float z = r[6] * p.x + r[7] * p.y + r[8] * p.z + t[2];
-            if (z < nearZ) continue;
-            splat(z, r[0] * p.x + r[1] * p.y + r[2] * p.z + t[0], r[3] * p.x + r[4] * p.y + r[5] * p.z + t[1],
-                  options.pointSize, rgb(p.r, p.g, p.b));
-        }
+        for (const auto& chunk : *scene.dense)
+            for (const vg::Point& p : *chunk) {
+                const float z = r[6] * p.x + r[7] * p.y + r[8] * p.z + t[2];
+                if (z < nearZ) continue;
+                splat(z, r[0] * p.x + r[1] * p.y + r[2] * p.z + t[0], r[3] * p.x + r[4] * p.y + r[5] * p.z + t[1],
+                      options.pointSize, rgb(p.r, p.g, p.b));
+            }
     }
     for (std::size_t i = 0; i < scene.points.size(); ++i) {
         const vg::Point& p = scene.points[i];

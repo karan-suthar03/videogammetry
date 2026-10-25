@@ -17,3 +17,7 @@ add_test(NAME pnp COMMAND test_pnp)
 add_executable(test_bundle_adjustment test_bundle_adjustment.cpp)
 target_link_libraries(test_bundle_adjustment PRIVATE videogammetry::core)
 add_test(NAME bundle_adjustment COMMAND test_bundle_adjustment)
+
+add_executable(test_mvs test_mvs.cpp)
+target_link_libraries(test_mvs PRIVATE videogammetry::core)
+add_test(NAME mvs COMMAND test_mvs)

@@ -124,6 +124,9 @@ public:
     double distortion() const { return intrinsics_.k1; }
     // Input-frame pixels per processed-image pixel (>= 1).
     float processScale() const { return processScale_; }
+    // Size of the processed image (valid after the first frame).
+    int imageWidth() const { return imageWidth_; }
+    int imageHeight() const { return imageHeight_; }
     // Threads used per frame (including the caller).
     int threadCount() const { return pool_ ? pool_->size() : 1; }
 
