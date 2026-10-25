@@ -30,6 +30,9 @@ std::vector<SettingEntry> settingEntries(ViewerSettings& s) {
         {"Dense", "denseFineIterations", "Dense rounds, finer levels", "", &s.session.denseParams.fineIterations, 0, kInf, 1},
         {"Dense", "denseMinNcc", "Dense match threshold", "NCC, -1..1", &s.session.denseParams.minNcc, -1, 1, 0.05},
         {"Dense", "denseMinViews", "Dense agreeing views", "besides the keyframe", &s.session.denseParams.minConsistentViews, 1, 16, 1},
+        {"Dense", "denseSelect", "Dense: only good keyframes", "skip blurry and near-duplicate ones", &s.session.denseParams.selectKeyframes, 0, 1, 1},
+        {"Dense", "denseMinSharpness", "Dense sharpness limit", "vs. nearby keyframes, 0..1", &s.session.denseParams.minSharpness, 0, 1, 0.05},
+        {"Dense", "denseSpacing", "Dense keyframe spacing", "x scene depth", &s.session.denseParams.referenceSpacing, 0, kInf, 0.01},
         {"Dense", "denseThreads", "Dense threads", "0 = all", &s.session.denseParams.threads, 0, kInf, 1},
     };
     // clang-format on

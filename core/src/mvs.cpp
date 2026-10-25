@@ -455,7 +455,9 @@ struct DenseReconstructor::View {
     MvsView mvs;
     std::vector<int> points;   // indices into mapPoints_
     std::vector<int> sources;  // indices into views_
-    double minDepth = 0, maxDepth = 0;
+    double minDepth = 0, maxDepth = 0, medianDepth = 0;
+    double sharpness = 0;  // mean squared Laplacian of the gray image
+    bool reference = true, blurry = false;
     std::vector<std::uint8_t> rgb;  // half size
     int rgbWidth = 0, rgbHeight = 0;
     std::vector<std::uint16_t> depth;  // quantized inverse depth, 0 = none
@@ -506,6 +508,7 @@ DenseReconstructor::DenseReconstructor(const Reconstructor& r, const DenseParams
         }
         if (z.size() >= 10) {
             std::sort(z.begin(), z.end());
+            view.medianDepth = z[z.size() / 2];
             view.minDepth = 0.6 * z[z.size() / 100];
             view.maxDepth = 1.6 * z[z.size() - 1 - z.size() / 100];
         }
@@ -614,18 +617,82 @@ void DenseReconstructor::addImage(long frameIndex, const FrameView& frame) {
                 view.rgb[(static_cast<std::size_t>(y) * view.rgbWidth + x) * 3 + c] =
                     static_cast<std::uint8_t>((at(2 * x, 2 * y) + at(x1, 2 * y) + at(2 * x, y1) + at(x1, y1) + 2) / 4);
             }
+    double sum = 0;
+    long count = 0;
+    for (int y = 1; y + 1 < height_; y += 2) {
+        const std::uint8_t* r = view.mvs.gray.row(y);
+        for (int x = 1; x + 1 < width_; x += 2, ++count) {
+            const double l = 4.0 * r[x] - r[x - 1] - r[x + 1] - r[x - width_] - r[x + width_];
+            sum += l * l;
+        }
+    }
+    view.sharpness = count ? sum / count : 0;
     view.hasImage = true;
     std::lock_guard<std::mutex> lock(mutex_);
     ++progress_.keyframes;
 }
 
+void DenseReconstructor::selectReferences() {
+    const int n = static_cast<int>(views_.size());
+    int blurry = 0;
+    if (params_.selectKeyframes) {
+        // Blurry: much less sharp than the keyframes around it (in time).
+        for (int v = 0; v < n; ++v) {
+            View& view = views_[static_cast<std::size_t>(v)];
+            if (!view.hasImage) continue;
+            std::vector<double> around;
+            for (int o = std::max(0, v - 5); o <= std::min(n - 1, v + 5); ++o)
+                if (views_[static_cast<std::size_t>(o)].hasImage) around.push_back(views_[static_cast<std::size_t>(o)].sharpness);
+            std::nth_element(around.begin(), around.begin() + around.size() / 2, around.end());
+            view.blurry = view.sharpness < params_.minSharpness * around[around.size() / 2];
+            blurry += view.blurry;
+        }
+    }
+    for (View& view : views_) {  // blurry views are no help as sources either
+        std::vector<int> kept;
+        for (int s : view.sources)
+            if (views_[static_cast<std::size_t>(s)].hasImage && !views_[static_cast<std::size_t>(s)].blurry) kept.push_back(s);
+        view.sources = std::move(kept);
+        view.reference = view.hasImage && !view.blurry && view.minDepth > 0 && view.sources.size() >= 2;
+    }
+    if (params_.selectKeyframes) {
+        // Near-duplicates: the sharpest of each place keeps its depth map.
+        std::vector<int> order;
+        for (int v = 0; v < n; ++v)
+            if (views_[static_cast<std::size_t>(v)].reference) order.push_back(v);
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+            return views_[static_cast<std::size_t>(a)].sharpness > views_[static_cast<std::size_t>(b)].sharpness;
+        });
+        const double maxAngle = params_.referenceAngleDeg * kPi / 180;
+        std::vector<int> selected;
+        for (int v : order) {
+            View& view = views_[static_cast<std::size_t>(v)];
+            const Vec3 c = view.mvs.pose.center();
+            const double spacing = params_.referenceSpacing * view.medianDepth;
+            for (int s : selected) {
+                const View& other = views_[static_cast<std::size_t>(s)];
+                if (norm(other.mvs.pose.center() - c) < spacing &&
+                    rotationAngle(view.mvs.pose.R * other.mvs.pose.R.transposed()) < maxAngle) {
+                    view.reference = false;
+                    break;
+                }
+            }
+            if (view.reference) selected.push_back(v);
+        }
+    }
+    int references = 0;
+    for (const View& view : views_) references += view.reference;
+    std::lock_guard<std::mutex> lock(mutex_);
+    progress_.references = references;
+    progress_.blurry = blurry;
+}
+
 void DenseReconstructor::computeDepth(int index, ThreadPool& pool, const std::atomic<bool>& cancel) {
     View& view = views_[static_cast<std::size_t>(index)];
     view.depthDone = true;
-    if (!view.hasImage || !(view.minDepth > 0)) return;
+    if (!view.reference) return;
     std::vector<const MvsView*> sources;
-    for (int s : view.sources)
-        if (views_[static_cast<std::size_t>(s)].hasImage) sources.push_back(&views_[static_cast<std::size_t>(s)].mvs);
+    for (int s : view.sources) sources.push_back(&views_[static_cast<std::size_t>(s)].mvs);
     if (sources.size() < 2) return;
     std::vector<Vec3> seeds;
     for (int id : view.points) seeds.push_back(mapPoints_[static_cast<std::size_t>(id)]);
@@ -740,6 +807,7 @@ void DenseReconstructor::fuse(int index) {
 
 bool DenseReconstructor::run(const std::atomic<bool>& cancel, const std::function<void()>& onUpdate) {
     ThreadPool pool(params_.threads);
+    selectReferences();
     const int n = static_cast<int>(views_.size());
     const auto ready = [&](int v) {
         if (views_[static_cast<std::size_t>(v)].fused || !views_[static_cast<std::size_t>(v)].depthDone) return false;
@@ -749,6 +817,10 @@ bool DenseReconstructor::run(const std::atomic<bool>& cancel, const std::functio
     };
     for (int v = 0; v < n; ++v) {
         if (cancel) return false;
+        if (!views_[static_cast<std::size_t>(v)].reference) {
+            views_[static_cast<std::size_t>(v)].depthDone = true;
+            continue;
+        }
         const auto start = std::chrono::steady_clock::now();
         computeDepth(v, pool, cancel);
         if (cancel) return false;

@@ -276,12 +276,12 @@ void LiveSession::runDense(double processingFps, const std::string& summary) {
         if (!p.finished && Clock::now() - lastStatus < std::chrono::milliseconds(200)) return;
         lastStatus = Clock::now();
         if (p.finished) {
-            std::snprintf(buf, sizeof(buf), "dense: done, %.2f M points from %d keyframes (%dx%d)", p.points / 1e6,
-                          p.keyframes, p.width, p.height);
+            std::snprintf(buf, sizeof(buf), "dense: done, %.2f M points from %d of %d keyframes (%d blurry) (%dx%d)",
+                          p.points / 1e6, p.references, p.keyframes, p.blurry, p.width, p.height);
         } else {
-            std::snprintf(buf, sizeof(buf), "dense: depth maps %d / %d (last %.1f s)   fused %d   %.2f M points   %dx%d",
-                          p.depthMaps, static_cast<int>(needed.size()), p.lastDepthMs / 1000, p.fused, p.points / 1e6,
-                          p.width, p.height);
+            std::snprintf(buf, sizeof(buf), "dense: depth maps %d / %d selected keyframes of %d (%d blurry)   last %.1f s"
+                          "   %.2f M points   %dx%d", p.depthMaps, p.references, p.keyframes, p.blurry,
+                          p.lastDepthMs / 1000, p.points / 1e6, p.width, p.height);
         }
         status(buf);
     };
