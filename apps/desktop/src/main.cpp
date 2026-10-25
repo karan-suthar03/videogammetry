@@ -18,9 +18,11 @@
 #include "power.h"
 #include "video_reader.h"
 #include "videogammetry/map_quality.h"
+#include "videogammetry/mvs.h"
 #include "videogammetry/reconstructor.h"
 #include "videogammetry/version.h"
 #ifdef VG_HAS_GPU
+#include "videogammetry/gpu/gpu_mvs.h"
 #include "videogammetry/gpu/gpu_orb.h"
 #endif
 
@@ -39,6 +41,11 @@ void printUsage() {
         "  --export-colmap <dir>       also write the keyframes as a COLMAP text model (poses + images\n"
         "                              undistorted, at the --size resolution; map points), e.g. for 3DGS\n"
         "  --export-max <n>            keyframes in that export, evenly spaced, 0 = all (default 300)\n"
+        "  --dense                     after tracking, also build the dense cloud (as the viewer does) and write\n"
+        "                              <output>_dense.ply; with --export-colmap its points3D.txt holds the dense\n"
+        "                              points (better splat initialization) instead of the sparse ones\n"
+        "  --dense-size <px>           long side of the images the dense stage matches, 0 = video size (default 0)\n"
+        "  --dense-cpu                 dense depth maps on the CPU even when there is a GPU\n"
         "  --size <px>                 long side of the frame is downscaled to this, 0 = full resolution (default 0)\n"
         "  --threads <n>               worker threads for tracking/mapping, 0 = all hardware threads (default 0)\n"
         "  --extract-workers <n>       frames whose features are extracted in parallel, 0 = all hardware threads\n"
@@ -101,8 +108,10 @@ std::array<double, 4> toQuaternion(const vg::Mat3& R) {
 // map points and their keypoints per image. Decodes the video a second time to get the keyframe images.
 // At most `maxImages` keyframes, evenly spaced in video order (0 = all),
 // with the long side of the images at most `maxSize` (0 = video size).
+// `dense` given: points3D.txt holds those points instead of the map points
+// (and the images list no 2D points, since dense points have no tracks).
 bool exportColmap(const std::string& video, const vg::Reconstructor& rec, const std::filesystem::path& dir,
-                  std::size_t maxImages, int maxSize) {
+                  std::size_t maxImages, int maxSize, const vg::PointCloud* dense = nullptr) {
     std::vector<const vg::Keyframe*> all;
     for (const vg::Keyframe& kf : rec.keyframes()) all.push_back(&kf);
     std::sort(all.begin(), all.end(), [](auto* a, auto* b) { return a->frameIndex < b->frameIndex; });
@@ -192,7 +201,7 @@ bool exportColmap(const std::string& video, const vg::Reconstructor& rec, const 
                       q[3], kf.pose.t.x, kf.pose.t.y, kf.pose.t.z, name);
         images << line;
         // Observed (undistorted) keypoints of map points, in exported pixels.
-        for (std::size_t i = 0; i < kf.keypoints.size(); ++i) {
+        for (std::size_t i = 0; !dense && i < kf.keypoints.size(); ++i) {
             const int id = kf.pointIds[i];
             if (id < 0 || std::size_t(id) >= points.size() || points[std::size_t(id)].bad) continue;
             std::snprintf(line, sizeof(line), "%.2f %.2f %d ", (kf.keypoints[i].x + 0.5) * scale,
@@ -213,16 +222,77 @@ bool exportColmap(const std::string& video, const vg::Reconstructor& rec, const 
     cameras << "# CAMERA_ID MODEL WIDTH HEIGHT PARAMS[]\n" << line;
     std::ofstream pointsFile(sparseDir / "points3D.txt");
     pointsFile << "# POINT3D_ID X Y Z R G B ERROR (no tracks)\n";
-    for (std::size_t i = 0; i < points.size(); ++i) {
+    for (std::size_t i = 0; dense && i < dense->points.size(); ++i) {
+        const vg::Point& p = dense->points[i];
+        std::snprintf(line, sizeof(line), "%zu %.6f %.6f %.6f %d %d %d 0\n", i + 1, p.x, p.y, p.z, p.r, p.g, p.b);
+        pointsFile << line;
+    }
+    for (std::size_t i = 0; !dense && i < points.size(); ++i) {
         const vg::MapPoint& p = points[i];
         if (p.bad) continue;
         std::snprintf(line, sizeof(line), "%zu %.6f %.6f %.6f %d %d %d 0\n", i + 1, p.position.x, p.position.y,
                       p.position.z, p.color[0], p.color[1], p.color[2]);
         pointsFile << line;
     }
-    std::printf("export:  %zu keyframes to %s (PINHOLE %dx%d, f %.1f px, undistorted k1 %.3f)\n", kfs.size(),
-                dir.string().c_str(), width, height, fx, k1);
+    std::printf("export:  %zu keyframes to %s (PINHOLE %dx%d, f %.1f px, undistorted k1 %.3f), %zu %s points\n",
+                kfs.size(), dir.string().c_str(), width, height, fx, k1,
+                dense ? dense->points.size() : points.size(), dense ? "dense" : "map");
     return true;
+}
+
+// The dense stage of the viewer (vg::DenseReconstructor): decodes the
+// keyframe images again, computes and fuses the depth maps. Progress on one
+// line; the result is empty if it could not run.
+vg::PointCloud buildDense(const std::string& video, const vg::Reconstructor& rec, const vg::DenseParams& params,
+                          bool gpu) {
+    if (rec.keyframes().size() < 3) {
+        std::fprintf(stderr, "warning: too few keyframes for the dense cloud\n");
+        return {};
+    }
+    vg::DenseReconstructor dense(rec, params);
+#ifdef VG_HAS_GPU
+    if (gpu) {
+        std::string device;
+        vg::DepthMapSolver solver = vg::gpu::makeGpuDepthSolver(device);
+        dense.setDepthSolver(std::move(solver), device);
+    }
+#else
+    (void)gpu;
+#endif
+    VideoReader reader;
+    std::string error;
+    if (!reader.open(video, error)) {
+        std::fprintf(stderr, "error: %s\n", error.c_str());
+        return {};
+    }
+    reader.setMaxSize(dense.imageLongSide(reader.info().width, reader.info().height));
+    const std::vector<long>& needed = dense.frames();
+    std::size_t next = 0;
+    vg::FrameView frame;
+    for (long index = 0; next < needed.size() && reader.read(frame); ++index) {
+        if (index != needed[next]) continue;
+        dense.addImage(index, frame);
+        ++next;
+    }
+    const vg::DenseReconstructor::Progress start = dense.progress();
+    std::printf("dense:   kept %d of %d keyframes, images %dx%d, depth maps on %s\n", start.selected,
+                start.totalKeyframes, start.width, start.height, start.solver.c_str());
+    const auto t0 = std::chrono::steady_clock::now();
+    auto last = t0;
+    const std::atomic<bool> cancel{false};
+    dense.run(cancel, [&]() {
+        const auto now = std::chrono::steady_clock::now();
+        const vg::DenseReconstructor::Progress p = dense.progress();
+        if (!p.finished && now - last < std::chrono::milliseconds(500)) return;
+        last = now;
+        std::printf("\rdense:   depth maps %d / %d, %.2f M points, %.0f s   ", p.depthMaps, p.references, p.points / 1e6,
+                    std::chrono::duration<double>(now - t0).count());
+        std::fflush(stdout);
+    });
+    const vg::DenseReconstructor::Progress p = dense.progress();
+    std::printf("\ndense:   %.2f M points from %d keyframes in %.0f s (%s)\n", p.points / 1e6, p.references,
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), p.solver.c_str());
+    return dense.pointCloud();
 }
 
 const char* stateName(vg::Reconstructor::State s) {
@@ -242,6 +312,8 @@ int main(int argc, char** argv) {
     std::string trajectoryPath;
     std::string colmapDir;
     std::size_t exportMax = 300;
+    bool dense = false, denseGpu = true;
+    vg::DenseParams denseParams;
     long saveFrameIndex = -1;
     std::string saveFramePath;
     vg::Reconstructor::Options options;
@@ -271,6 +343,12 @@ int main(int argc, char** argv) {
             trajectoryPath = argv[++i];
         } else if (std::strcmp(argv[i], "--export-colmap") == 0 && i + 1 < argc) {
             colmapDir = argv[++i];
+        } else if (std::strcmp(argv[i], "--dense") == 0) {
+            dense = true;
+        } else if (std::strcmp(argv[i], "--dense-size") == 0 && i + 1 < argc) {
+            denseParams.imageSize = static_cast<int>(std::max(0L, std::strtol(argv[++i], nullptr, 10)));
+        } else if (std::strcmp(argv[i], "--dense-cpu") == 0) {
+            denseGpu = false;
         } else if (std::strcmp(argv[i], "--export-max") == 0 && i + 1 < argc) {
             exportMax = static_cast<std::size_t>(std::max(0L, std::strtol(argv[++i], nullptr, 10)));
         } else if (std::strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
@@ -552,10 +630,25 @@ int main(int argc, char** argv) {
         }
     }
 
+    vg::PointCloud denseCloud;
+    if (dense) {
+        denseCloud = buildDense(input, reconstructor, denseParams, denseGpu);
+        std::string densePath = output;
+        if (densePath.size() > 4 && densePath.ends_with(".ply")) densePath.resize(densePath.size() - 4);
+        densePath += "_dense.ply";
+        if (!vg::writePly(denseCloud, densePath)) {
+            std::fprintf(stderr, "error: could not write %s\n", densePath.c_str());
+            return 1;
+        }
+        std::printf("output:  %s (%zu points)\n", densePath.c_str(), denseCloud.points.size());
+    }
+
     if (!colmapDir.empty()) {
         if (st.maps > 1 && reconstructor.trajectory().size() != reconstructor.keyframes().size())
             std::fprintf(stderr, "warning: tracking restarted; exporting the last map, not the largest\n");
-        if (!exportColmap(input, reconstructor, colmapDir, exportMax, options.processSize)) return 1;
+        if (!exportColmap(input, reconstructor, colmapDir, exportMax, options.processSize,
+                          denseCloud.points.empty() ? nullptr : &denseCloud))
+            return 1;
     }
 
     if (!dumpDir.empty()) {
