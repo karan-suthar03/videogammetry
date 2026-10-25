@@ -46,8 +46,7 @@ struct RenderOptions {
     bool highlightTracked = true; // points seen in the current frame drawn green
     bool colorByNoise = true;     // points colored by depth uncertainty instead of their own color
     bool showKeyframes = true;
-    bool showDense = true;        // background dense cloud
-    bool showDenseWork = true;    // the dense solver's current and recent cells, and the cameras it uses
+    bool showDense = true;        // dense cloud
 };
 
 // Draws the map, keyframe and current-camera frustums and the camera path

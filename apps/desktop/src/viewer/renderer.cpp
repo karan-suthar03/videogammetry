@@ -246,36 +246,6 @@ void SceneRenderer::render(const LiveSnapshot& scene, const OrbitView& view, con
         drawLine3D(scene.keyframes.back().center(), scene.current.center(), kPath, 2, pr, fb);
     }
 
-    // Dense solver at work: recent cells fade from green, the current one is
-    // yellow with lines to the cameras it matches (reference in cyan).
-    if (options.showDenseWork && scene.denseActivity) {
-        const vg::DenseMapper::Activity& a = *scene.denseActivity;
-        const auto box = [&](const vg::DenseMapper::Activity::Box& b, std::uint32_t color, int width) {
-            const vg::Vec3& l = b.lo;
-            const vg::Vec3& h = b.hi;
-            const vg::Vec3 c[8] = {{l.x, l.y, l.z}, {h.x, l.y, l.z}, {h.x, h.y, l.z}, {l.x, h.y, l.z},
-                                   {l.x, l.y, h.z}, {h.x, l.y, h.z}, {h.x, h.y, h.z}, {l.x, h.y, h.z}};
-            for (int i = 0; i < 4; ++i) {
-                drawLine3D(c[i], c[(i + 1) % 4], color, width, pr, fb);
-                drawLine3D(c[4 + i], c[4 + (i + 1) % 4], color, width, pr, fb);
-                drawLine3D(c[i], c[4 + i], color, width, pr, fb);
-            }
-        };
-        for (auto it = a.recent.rbegin(); it != a.recent.rend(); ++it) {
-            const double f = std::clamp(1.0 - it->age / 6.0, 0.15, 1.0);
-            const auto mix = [&](int on, int bg) { return static_cast<int>(bg + (on - bg) * f); };
-            const std::uint32_t color = it->points > 0 ? rgb(mix(80, 22), mix(230, 24), mix(120, 29))
-                                                       : rgb(mix(200, 22), mix(90, 24), mix(90, 29));
-            box(*it, color, 1);
-        }
-        if (a.solving) {
-            const vg::Vec3 mid = (a.current.lo + a.current.hi) * 0.5;
-            for (const vg::Vec3& v : a.views) drawLine3D(v, mid, rgb(70, 140, 170), 1, pr, fb);
-            drawLine3D(a.reference, mid, rgb(90, 230, 255), 2, pr, fb);
-            box(a.current, rgb(255, 220, 60), 2);
-        }
-    }
-
     // Through the camera, recent keyframes sit right around the eye and would
     // cover the view.
     if (options.showKeyframes && !throughCamera) {

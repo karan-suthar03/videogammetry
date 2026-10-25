@@ -281,24 +281,16 @@ void drawHud(HDC dc) {
             }
             line(buf, s.focalUpdates > 0 ? RGB(150, 230, 150) : dim);
         }
-        if (s.dense) {
-            swprintf(buf, 512, L"dense: %ld points   %ld map points replaced   %d / %d regions solved   %d solves (last %.0f ms)   %d images%s",
-                     s.denseStats.points, s.denseStats.hiddenSparse, s.denseStats.solvedRegions, s.denseStats.regions, s.denseStats.solves,
-                     s.denseStats.lastSolveMs, s.denseStats.images,
-                     s.denseStats.idle ? L"   [finished: nothing left to solve]" : L"");
-            line(buf, dim);
-        }
         if (!s.message.empty()) line(fromUtf8(s.message), RGB(255, 210, 120));
         if (!g.notice.empty()) line(g.notice, RGB(140, 220, 255));
     }
 
     const wchar_t* help[] = {
         L"left-drag orbit   right-drag pan   wheel zoom   C look through camera   F follow camera   R reset view",
-        L"Space pause   M real-time/max speed   T highlight tracked   N noise colors   K keyframes   D dense   B dense work   +/- point size   O open   E end capture   S save .ply   Esc menu",
-        L"red: current camera   blue: keyframes   orange: camera path   green: points tracked in this frame   "
-        L"yellow box: region being densified (cyan: its cameras), green: done, red: nothing found",
+        L"Space pause   M real-time/max speed   T highlight tracked   N noise colors   K keyframes   D dense   +/- point size   O open   E end capture   S save .ply   Esc menu",
+        L"red: current camera   blue: keyframes   orange: camera path   green: points tracked in this frame",
     };
-    int hy = g.height - margin - lineH * 3;
+    int hy = g.height - margin - lineH * static_cast<int>(sizeof(help) / sizeof(help[0]));
     for (const wchar_t* h : help) {
         drawText(dc, margin, hy, h, dim);
         hy += lineH;
@@ -793,7 +785,6 @@ void onKey(WPARAM key) {
         case 'N': g.cfg.render.colorByNoise = !g.cfg.render.colorByNoise; break;
         case 'K': g.cfg.render.showKeyframes = !g.cfg.render.showKeyframes; break;
         case 'D': g.cfg.render.showDense = !g.cfg.render.showDense; break;
-        case 'B': g.cfg.render.showDenseWork = !g.cfg.render.showDenseWork; break;
         case VK_ADD:
         case VK_OEM_PLUS: g.cfg.render.pointSize = std::min(g.cfg.render.pointSize + 1, 100); break;
         case VK_SUBTRACT:

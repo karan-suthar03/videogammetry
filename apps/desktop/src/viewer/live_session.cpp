@@ -60,27 +60,8 @@ std::shared_ptr<const LiveSnapshot> LiveSession::latest() const {
 
 bool LiveSession::savePly(const std::string& path, std::size_t& pointsWritten) const {
     if (!done_ || !reconstructor_) return false;
-    vg::PointCloud cloud = reconstructor_->pointCloud();
-    if (dense_) {  // the current map without what the dense cloud replaced
-        const auto hidden = dense_->hiddenSparse();
-        const float maxNoise = static_cast<float>(settings_.options.maxPointNoisePct / 100.0);
-        const std::vector<vg::MapPoint>& mp = reconstructor_->mapPoints();
-        cloud.points.clear();
-        for (std::size_t i = 0; i < mp.size(); ++i) {
-            const vg::MapPoint& p = mp[i];
-            if (p.bad || (maxNoise > 0 && p.noise > maxNoise)) continue;
-            if (hidden && i < hidden->size() && (*hidden)[i]) continue;
-            cloud.points.push_back({static_cast<float>(p.position.x), static_cast<float>(p.position.y),
-                                    static_cast<float>(p.position.z), p.color[0], p.color[1], p.color[2]});
-        }
-    }
+    const vg::PointCloud cloud = reconstructor_->pointCloud();
     pointsWritten = cloud.points.size();
-    if (dense_) {  // the dense cloud next to it: <name>_dense.ply
-        const auto d = dense_->cloud();
-        std::string densePath = path;
-        if (densePath.size() > 4 && densePath.ends_with(".ply")) densePath.resize(densePath.size() - 4);
-        vg::writePly({*d}, densePath + "_dense.ply");
-    }
     return vg::writePly(cloud, path);
 }
 
@@ -111,7 +92,6 @@ void LiveSession::run() {
         frames = std::make_unique<FramePrefetcher>(reader);
     }
     reconstructor_ = std::make_unique<vg::Reconstructor>(settings_.options);
-    if (settings_.dense) dense_ = std::make_unique<vg::DenseMapper>(settings_.denseParams);
 
     // Frames -> parallel feature extraction -> this thread (tracking and
     // mapping, in order), as in the CLI.
@@ -198,12 +178,6 @@ void LiveSession::run() {
             publish(&frame, processingFps, false, {});
             lastPublish = now;
         }
-        if (dense_) {  // after publish: the frame's pixels are handed over
-            if (reconstructor_->lastWasKeyframe()) {
-                dense_->addKeyframeImage(reconstructor_->keyframes().back().frameIndex, pipeline.takePixels(), frame);
-            }
-            dense_->updateMap(*reconstructor_);
-        }
     }
     feeder.join();
     {
@@ -221,8 +195,6 @@ void LiveSession::run() {
         publish(nullptr, processingFps, false, "video done, refining the whole map (global bundle adjustment)...");
     }
     reconstructor_->finish();
-    if (dense_) dense_->setFullSpeed(true);  // tracking is over: the whole CPU
-    if (dense_) dense_->updateMap(*reconstructor_, true);
     const vg::Reconstructor::Stats& st = reconstructor_->stats();
     char summary[256];
     if (st.globalBA.ok) {
@@ -233,13 +205,6 @@ void LiveSession::run() {
     }
     publish(nullptr, processingFps, true, summary);
     done_ = true;
-
-    // The dense solver keeps refining after the video: keep showing its
-    // progress until the session is closed.
-    while (dense_ && !stop_) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        publish(nullptr, processingFps, true, summary);
-    }
 }
 
 void LiveSession::publish(const vg::FrameView* frame, double processingFps, bool finished,
@@ -266,11 +231,9 @@ void LiveSession::publish(const vg::FrameView* frame, double processingFps, bool
     s->noise.reserve(mapPoints.size());
     // Hidden like in the saved cloud (Reconstructor::pointCloud).
     const float maxNoise = static_cast<float>(settings_.options.maxPointNoisePct / 100.0);
-    const auto hidden = dense_ ? dense_->hiddenSparse() : nullptr;  // replaced by the dense cloud
     for (std::size_t i = 0; i < mapPoints.size(); ++i) {
         const vg::MapPoint& p = mapPoints[i];
         if (p.bad) continue;
-        if (hidden && i < hidden->size() && (*hidden)[i]) continue;
         if (maxNoise > 0 && p.noise > maxNoise) continue;
         vg::Point q;
         q.x = static_cast<float>(p.position.x);
@@ -305,11 +268,6 @@ void LiveSession::publish(const vg::FrameView* frame, double processingFps, bool
                                   r.processScale() * float(tw) / float(frame->width));
     }
     s->thumbnail = thumbnail_;
-    if (dense_) {
-        s->dense = dense_->cloud();
-        s->denseStats = dense_->stats();
-        s->denseActivity = dense_->activity();
-    }
 
     s->frame = frame_;
     s->frameCount = frameCount_;

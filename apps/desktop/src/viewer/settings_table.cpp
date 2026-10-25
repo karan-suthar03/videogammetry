@@ -20,14 +20,6 @@ std::vector<SettingEntry> settingEntries(ViewerSettings& s) {
         {"Playback", "colorByNoise", "Color points by noise", "green = precise, red = noisy", &s.render.colorByNoise, 0, 1, 1},
         {"Playback", "showKeyframes", "Show keyframes", "", &s.render.showKeyframes, 0, 1, 1},
         {"Playback", "showDense", "Show dense cloud", "", &s.render.showDense, 0, 1, 1},
-        {"Playback", "showDenseWork", "Show dense solver at work", "cells and cameras", &s.render.showDenseWork, 0, 1, 1},
-        {"Dense", "dense", "Dense cloud in the background", "", &s.session.dense, 0, 1, 1},
-        {"Dense", "denseImageSize", "Dense image size", "px, long side", &s.session.denseParams.imageSize, 32, kInf, 80},
-        {"Dense", "denseThreads", "Dense threads", "0 = half the cores", &s.session.denseParams.threads, 0, kInf, 1},
-        {"Dense", "denseMinNcc", "Dense match threshold", "NCC, -1..1", &s.session.denseParams.minNcc, -1, 1, 0.05},
-        {"Dense", "denseMaxImages", "Dense keyframe images kept", "~0.4 MB each; oldest dropped", &s.session.denseParams.maxImages, 3, kInf, 50},
-        {"Dense", "denseRefine", "Refine dense cells while idle", "off = solve each cell once", &s.session.denseParams.refine, 0, 1, 1},
-        {"Dense", "denseHideSparse", "Dense replaces sparse points", "off = only adds points", &s.session.denseParams.hideSparse, 0, 1, 1},
         {"Processing", "gpu", "Extract features on the GPU", "Vulkan; CPU if none", &s.session.gpu, 0, 1, 1},
     };
     // clang-format on
