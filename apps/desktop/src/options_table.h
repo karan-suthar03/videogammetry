@@ -5,6 +5,7 @@
 #include <variant>
 #include <vector>
 
+#include "videogammetry/mvs.h"
 #include "videogammetry/reconstructor.h"
 
 // Every reconstruction option as one flat table, shared by the viewer's menu
@@ -23,6 +24,8 @@ struct SettingEntry {
 };
 
 std::vector<SettingEntry> optionEntries(vg::Reconstructor::Options& o);
+// The dense stage's parameters (keys "dense..."), shared by the viewer and the CLI.
+std::vector<SettingEntry> denseEntries(vg::DenseParams& p);
 
 // Full explanation of a setting (by key): what it does, what raising and
 // lowering it changes, what extreme values do. "" for an unknown key.
@@ -41,5 +44,7 @@ bool parseSettingValue(const std::string& text, double& v);
 bool applySettingLine(const std::string& line, const std::vector<SettingEntry>& entries, std::string* key,
                       std::string* value);
 // Reads a settings file (e.g. the viewer's viewer.ini); unknown keys are
-// ignored, missing ones keep their value. False if it cannot be opened.
-bool loadOptionsFile(const std::filesystem::path& file, vg::Reconstructor::Options& options);
+// ignored, missing ones keep their value. With `dense`, its keys are read too.
+// False if it cannot be opened.
+bool loadOptionsFile(const std::filesystem::path& file, vg::Reconstructor::Options& options,
+                     vg::DenseParams* dense = nullptr);

@@ -22,6 +22,7 @@
 #include "videogammetry/map_quality.h"
 #include "videogammetry/mvs.h"
 #include "videogammetry/reconstructor.h"
+#include "videogammetry/thread_pool.h"
 #include "videogammetry/version.h"
 #ifdef VG_HAS_GPU
 #include "videogammetry/gpu/gpu_mvs.h"
@@ -48,6 +49,8 @@ void printUsage() {
         "                              points (better splat initialization) instead of the sparse ones\n"
         "  --dense-size <px>           long side of the images the dense stage matches, 0 = video size (default 0)\n"
         "  --dense-cpu                 dense depth maps on the CPU even when there is a GPU\n"
+        "  --dense-figures <dir>       with the dense cloud, also write images of how three keyframes' depth maps\n"
+        "                              are found (seeds, rounds, levels, depth, normals, cost) as .bmp\n"
         "  --export-points <file.ply>  with --export-colmap: points3D.txt holds the points of this cloud (e.g. a\n"
         "                              dense cloud saved by the viewer) instead of the map points\n"
         "  --align-to <sparse.ply>     the sparse cloud saved together with that file: it is aligned onto this\n"
@@ -248,11 +251,149 @@ bool exportColmap(const std::string& video, const vg::Reconstructor& rec, const 
     return true;
 }
 
+// Nearest-neighbour upscale, so the pixels of a coarse level stay visible.
+RgbImage upscaleNearest(const RgbImage& src, int width, int height) {
+    RgbImage out;
+    out.width = width;
+    out.height = height;
+    out.pixels.resize(static_cast<std::size_t>(width) * height * 3);
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x) {
+            const int sx = std::min(x * src.width / width, src.width - 1);
+            const int sy = std::min(y * src.height / height, src.height - 1);
+            for (int c = 0; c < 3; ++c)
+                out.pixels[(static_cast<std::size_t>(y) * width + x) * 3 + c] =
+                    src.pixels[(static_cast<std::size_t>(sy) * src.width + sx) * 3 + c];
+        }
+    return out;
+}
+
+vg::Image halveGray(const vg::Image& src) {
+    vg::Image dst;
+    dst.resize(std::max(1, src.width / 2), std::max(1, src.height / 2));
+    for (int y = 0; y < dst.height; ++y)
+        for (int x = 0; x < dst.width; ++x) {
+            const int x1 = std::min(2 * x + 1, src.width - 1), y1 = std::min(2 * y + 1, src.height - 1);
+            dst.row(y)[x] = static_cast<std::uint8_t>(
+                (src.at(2 * x, 2 * y) + src.at(x1, 2 * y) + src.at(2 * x, y1) + src.at(x1, y1) + 2) / 4);
+        }
+    return dst;
+}
+
+// --dense-figures: for a few keyframes, images of how their depth map is
+// found: the keyframe, the map points that seed it, PatchMatch after 0, 1, 2
+// and 4 rounds at full size, the result of every level coarse to fine, and
+// the final depth, normals and matching cost. Unfiltered except the final
+// depth, all depths colored over the final one's range.
+void writeDenseFigures(const vg::DenseReconstructor& dense, const vg::DenseParams& params, bool gpu,
+                       const std::filesystem::path& dir) {
+    std::filesystem::create_directories(dir);
+    vg::DepthMapSolver solver;
+#ifdef VG_HAS_GPU
+    if (gpu) {
+        std::string device;
+        solver = vg::gpu::makeGpuDepthSolver(device);
+    }
+#else
+    (void)gpu;
+#endif
+    vg::ThreadPool pool(params.threads);
+    const auto solve = [&](const vg::MvsView& ref, const std::vector<const vg::MvsView*>& sources,
+                           const vg::PinholeCamera& k, const vg::DenseReconstructor::DepthInputs& in,
+                           const vg::DenseParams& p) {
+        vg::DepthMap dm;
+        if (p.iterations > 0 && solver && solver(ref, sources, k, in.minDepth, in.maxDepth, in.seeds, p, nullptr, dm))
+            return dm;
+        return vg::patchMatch(ref, sources, k, in.minDepth, in.maxDepth, in.seeds, p, &pool);
+    };
+    vg::DenseParams unfiltered = params;
+    unfiltered.minNcc = -2;  // keeps every depth in range
+    unfiltered.minPatchStd = 0;
+
+    const std::vector<long>& frames = dense.frames();
+    int written = 0;
+    for (double at : {0.2, 0.5, 0.8}) {
+        const long frame = frames[std::min(frames.size() - 1, static_cast<std::size_t>(at * frames.size()))];
+        vg::DenseReconstructor::DepthInputs in;
+        if (!dense.depthInputs(frame, in)) continue;
+        const vg::MvsView& ref = *in.reference;
+        const int w = ref.gray.width, h = ref.gray.height;
+        char prefix[32];
+        std::snprintf(prefix, sizeof(prefix), "kf%05ld_", frame);
+        const auto save = [&](const RgbImage& img, const char* name) {
+            writeImage(img.view(), (dir / (std::string(prefix) + name + ".bmp")).string());
+        };
+
+        RgbImage half;
+        half.width = in.rgbWidth;
+        half.height = in.rgbHeight;
+        half.pixels.assign(in.rgb, in.rgb + static_cast<std::size_t>(in.rgbWidth) * in.rgbHeight * 3);
+        const RgbImage color = resizeRgb(half.view(), w, h);
+        save(color, "color");
+        RgbImage seeds = color;
+        for (const vg::Vec3& X : in.seeds) {
+            const vg::Vec3 c = ref.pose.transform(X);
+            if (c.z <= 0) continue;
+            const int u = static_cast<int>(std::lround(in.camera.fx * c.x / c.z + in.camera.cx));
+            const int v = static_cast<int>(std::lround(in.camera.fy * c.y / c.z + in.camera.cy));
+            for (int dy = -2; dy <= 2; ++dy)
+                for (int dx = -2; dx <= 2; ++dx) {
+                    const int x = u + dx, y = v + dy;
+                    if (x < 0 || y < 0 || x >= w || y >= h) continue;
+                    std::uint8_t* px = &seeds.pixels[(static_cast<std::size_t>(y) * w + x) * 3];
+                    px[0] = 60, px[1] = 255, px[2] = 90;
+                }
+        }
+        save(seeds, "seeds");
+
+        const vg::DepthMap final = solve(ref, in.sources, in.camera, in, params);
+        float lo = 0, hi = 0;
+        if (!inverseDepthRange(final, lo, hi)) continue;
+        save(colorizeDepth(final, lo, hi), "depth");
+        save(colorizeNormals(final), "normals");
+        save(colorizeCost(final, 1.0f), "cost");
+
+        // Full size only: how the search settles round by round.
+        for (int rounds : {0, 1, 2, 4}) {
+            vg::DenseParams p = unfiltered;
+            p.scales = 1;
+            p.iterations = rounds;
+            char name[32];
+            std::snprintf(name, sizeof(name), "round%d", rounds);
+            save(colorizeDepth(solve(ref, in.sources, in.camera, in, p), lo, hi), name);
+        }
+
+        // Coarse to fine: the result after each level (as the real run, unfiltered).
+        const int scales = std::max(1, params.scales);
+        std::vector<vg::MvsView> refLevels(1, ref);
+        std::vector<std::vector<vg::MvsView>> srcLevels;
+        for (const vg::MvsView* s : in.sources) srcLevels.push_back({*s});
+        for (int l = 1; l < scales; ++l) {
+            refLevels.push_back({ref.pose, halveGray(refLevels.back().gray)});
+            for (auto& levels : srcLevels) levels.push_back({levels.back().pose, halveGray(levels.back().gray)});
+        }
+        for (int l = scales - 1; l >= 0; --l) {
+            std::vector<const vg::MvsView*> sources;
+            for (const auto& levels : srcLevels) sources.push_back(&levels[static_cast<std::size_t>(l)]);
+            vg::DenseParams p = unfiltered;
+            p.scales = scales - l;
+            const vg::DepthMap dm =
+                solve(refLevels[static_cast<std::size_t>(l)], sources, in.camera.scaled(std::pow(2.0, l)), in, p);
+            char name[32];
+            std::snprintf(name, sizeof(name), "level%d", l);
+            save(upscaleNearest(colorizeDepth(dm, lo, hi), w, h), name);
+        }
+        ++written;
+        std::printf("dense:   figures for keyframe frame %ld written\n", frame);
+    }
+    if (written == 0) std::fprintf(stderr, "warning: no dense figures written\n");
+}
+
 // The dense stage of the viewer (vg::DenseReconstructor): decodes the
 // keyframe images again, computes and fuses the depth maps. Progress on one
 // line; the result is empty if it could not run.
 vg::PointCloud buildDense(const std::string& video, const vg::Reconstructor& rec, const vg::DenseParams& params,
-                          bool gpu) {
+                          bool gpu, const std::string& figuresDir) {
     if (rec.keyframes().size() < 3) {
         std::fprintf(stderr, "warning: too few keyframes for the dense cloud\n");
         return {};
@@ -282,6 +423,7 @@ vg::PointCloud buildDense(const std::string& video, const vg::Reconstructor& rec
         dense.addImage(index, frame);
         ++next;
     }
+    if (!figuresDir.empty()) writeDenseFigures(dense, params, gpu, figuresDir);
     const vg::DenseReconstructor::Progress start = dense.progress();
     std::printf("dense:   kept %d of %d keyframes, images %dx%d, depth maps on %s\n", start.selected,
                 start.totalKeyframes, start.width, start.height, start.solver.c_str());
@@ -485,6 +627,7 @@ int main(int argc, char** argv) {
     bool dense = false, denseGpu = true;
     std::string exportPointsPath, alignToPath;
     vg::DenseParams denseParams;
+    std::string denseFiguresDir;
     long saveFrameIndex = -1;
     std::string saveFramePath;
     vg::Reconstructor::Options options;
@@ -506,7 +649,7 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output = argv[++i];
         } else if (std::strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
-            if (!loadOptionsFile(argv[++i], options)) {
+            if (!loadOptionsFile(argv[++i], options, &denseParams)) {
                 std::fprintf(stderr, "error: cannot read %s\n", argv[i]);
                 return 1;
             }
@@ -522,6 +665,9 @@ int main(int argc, char** argv) {
             exportPointsPath = argv[++i];
         } else if (std::strcmp(argv[i], "--align-to") == 0 && i + 1 < argc) {
             alignToPath = argv[++i];
+        } else if (std::strcmp(argv[i], "--dense-figures") == 0 && i + 1 < argc) {
+            dense = true;
+            denseFiguresDir = argv[++i];
         } else if (std::strcmp(argv[i], "--dense-cpu") == 0) {
             denseGpu = false;
         } else if (std::strcmp(argv[i], "--export-max") == 0 && i + 1 < argc) {
@@ -807,7 +953,7 @@ int main(int argc, char** argv) {
 
     vg::PointCloud denseCloud;
     if (dense) {
-        denseCloud = buildDense(input, reconstructor, denseParams, denseGpu);
+        denseCloud = buildDense(input, reconstructor, denseParams, denseGpu, denseFiguresDir);
         std::string densePath = output;
         if (densePath.size() > 4 && densePath.ends_with(".ply")) densePath.resize(densePath.size() - 4);
         densePath += "_dense.ply";

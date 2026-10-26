@@ -712,6 +712,8 @@ void DenseReconstructor::computeDepth(int index, ThreadPool& pool, const std::at
         view.normal[i] = encodeNormal(Rt * dm.normal[i]);
     }
     view.hasDepth = true;
+    std::lock_guard<std::mutex> lock(mutex_);
+    lastDepth_ = std::make_shared<const DepthMap>(std::move(dm));
 }
 
 void DenseReconstructor::fuse(int index) {
@@ -864,6 +866,30 @@ DenseReconstructor::Progress DenseReconstructor::progress() const {
 std::shared_ptr<const DenseCloud> DenseReconstructor::cloud() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return cloud_;
+}
+
+bool DenseReconstructor::depthInputs(long frameIndex, DepthInputs& out) const {
+    const auto it = std::lower_bound(frames_.begin(), frames_.end(), frameIndex);
+    if (it == frames_.end() || *it != frameIndex) return false;
+    const View& view = views_[static_cast<std::size_t>(it - frames_.begin())];
+    out = {};
+    for (int s : view.sources)
+        if (views_[static_cast<std::size_t>(s)].hasImage) out.sources.push_back(&views_[static_cast<std::size_t>(s)].mvs);
+    if (!view.hasImage || !(view.minDepth > 0) || out.sources.size() < 2) return false;
+    out.reference = &view.mvs;
+    out.camera = camera_;
+    out.minDepth = view.minDepth;
+    out.maxDepth = view.maxDepth;
+    for (int id : view.points) out.seeds.push_back(mapPoints_[static_cast<std::size_t>(id)]);
+    out.rgb = view.rgb.data();
+    out.rgbWidth = view.rgbWidth;
+    out.rgbHeight = view.rgbHeight;
+    return true;
+}
+
+std::shared_ptr<const DepthMap> DenseReconstructor::lastDepthMap() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return lastDepth_;
 }
 
 PointCloud DenseReconstructor::pointCloud() const {

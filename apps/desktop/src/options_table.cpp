@@ -14,6 +14,25 @@ constexpr double kInf = std::numeric_limits<double>::infinity();
 
 }  // namespace
 
+std::vector<SettingEntry> denseEntries(vg::DenseParams& p) {
+    // clang-format off
+    return {
+        {"Dense", "denseImageSize", "Dense image size", "px, long side; 0 = the video's", &p.imageSize, 0, kInf, 160},
+        {"Dense", "denseMaxMemoryMB", "Dense memory limit", "MB; lowers the image size", &p.maxMemoryMB, 256, kInf, 512},
+        {"Dense", "denseSourceViews", "Dense views per keyframe", "2..16", &p.sourceViews, 2, 16, 1},
+        {"Dense", "denseScales", "Dense image levels", "coarse to fine", &p.scales, 1, 6, 1},
+        {"Dense", "denseIterations", "Dense rounds, coarsest level", "", &p.iterations, 1, kInf, 1},
+        {"Dense", "denseFineIterations", "Dense rounds, finer levels", "", &p.fineIterations, 0, kInf, 1},
+        {"Dense", "denseMinNcc", "Dense match threshold", "NCC, -1..1", &p.minNcc, -1, 1, 0.05},
+        {"Dense", "denseMinViews", "Dense agreeing views", "besides the keyframe", &p.minConsistentViews, 1, 16, 1},
+        {"Dense", "denseSelect", "Dense: thin out close keyframes", "keep the best of each spot", &p.selectKeyframes, 0, 1, 1},
+        {"Dense", "denseSpacing", "Dense keyframe spacing", "x scene depth", &p.keyframeSpacing, 0, kInf, 0.01},
+        {"Dense", "denseKeyframeAngle", "Dense keyframe angle", "deg; turned more = kept", &p.keyframeAngleDeg, 0, 180, 1},
+        {"Dense", "denseThreads", "Dense threads", "0 = all", &p.threads, 0, kInf, 1},
+    };
+    // clang-format on
+}
+
 std::vector<SettingEntry> optionEntries(vg::Reconstructor::Options& o) {
     vg::OrbParams& orb = o.orb;
     vg::MappingParams& m = o.mapping;
@@ -484,10 +503,14 @@ bool applySettingLine(const std::string& line, const std::vector<SettingEntry>& 
     return false;
 }
 
-bool loadOptionsFile(const std::filesystem::path& file, vg::Reconstructor::Options& options) {
+bool loadOptionsFile(const std::filesystem::path& file, vg::Reconstructor::Options& options, vg::DenseParams* dense) {
     std::ifstream in(file);
     if (!in) return false;
-    const std::vector<SettingEntry> entries = optionEntries(options);
+    std::vector<SettingEntry> entries = optionEntries(options);
+    if (dense) {
+        const std::vector<SettingEntry> more = denseEntries(*dense);
+        entries.insert(entries.end(), more.begin(), more.end());
+    }
     std::string line;
     while (std::getline(in, line)) applySettingLine(line, entries, nullptr, nullptr);
     return true;

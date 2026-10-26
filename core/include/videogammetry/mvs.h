@@ -152,6 +152,23 @@ public:
     // Any thread.
     Progress progress() const;
     std::shared_ptr<const DenseCloud> cloud() const;
+    // The depth map computed last (null before the first), for previews.
+    std::shared_ptr<const DepthMap> lastDepthMap() const;
+
+    // What the depth map of keyframe frame `frameIndex` is computed from, once
+    // the images are added (e.g. to run patchMatch() on it with other params,
+    // for figures). Pointers stay valid until run() finishes. False when that
+    // keyframe gets no depth map.
+    struct DepthInputs {
+        const MvsView* reference = nullptr;
+        std::vector<const MvsView*> sources;
+        PinholeCamera camera;
+        double minDepth = 0, maxDepth = 0;
+        std::vector<Vec3> seeds;  // world points
+        const std::uint8_t* rgb = nullptr;  // half-size color image
+        int rgbWidth = 0, rgbHeight = 0;
+    };
+    bool depthInputs(long frameIndex, DepthInputs& out) const;
     // The cloud so far with normals, for saving.
     PointCloud pointCloud() const;
 
@@ -175,6 +192,7 @@ private:
     mutable std::mutex mutex_;
     Progress progress_;
     std::shared_ptr<const DenseCloud> cloud_;
+    std::shared_ptr<const DepthMap> lastDepth_;
     std::vector<std::shared_ptr<const std::vector<Vec3>>> normals_;  // per chunk
 };
 

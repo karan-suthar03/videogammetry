@@ -39,7 +39,7 @@ struct LiveSnapshot {
     std::shared_ptr<const vg::DenseCloud> dense;  // dense cloud so far (may be null)
     std::string denseStatus;  // progress of the dense stage ("" = not running)
 
-    RgbImage thumbnail;  // current video frame with tracked keypoints drawn
+    RgbImage thumbnail;  // current video frame with tracked keypoints drawn; the latest depth map while dense runs
 
     // Status.
     long frame = 0, frameCount = 0;  // frameCount is an estimate, may be 0
@@ -118,7 +118,7 @@ private:
     mutable std::mutex mutex_;
     std::shared_ptr<const LiveSnapshot> snapshot_;
     long version_ = 0;
-    RgbImage thumbnail_;  // last frame's, kept for snapshots after the video ends
+    RgbImage thumbnail_;  // last frame's (or depth map's), kept for snapshots after the video ends
     std::string extractor_;
     std::shared_ptr<vg::DenseReconstructor> dense_;  // guarded by mutex_
     std::string denseStatus_;                        // guarded by mutex_

@@ -6,6 +6,7 @@
 
 #include "videogammetry/frame.h"
 #include "videogammetry/matcher.h"
+#include "videogammetry/mvs.h"
 #include "videogammetry/linalg.h"
 #include "videogammetry/orb.h"
 #include "videogammetry/point_cloud.h"
@@ -56,6 +57,18 @@ RgbImage drawTracking(const vg::FrameView& frame, const std::vector<vg::Keypoint
 // in red with the start marked green. Bounds ignore the farthest 2% of points.
 RgbImage renderMapViews(const std::vector<vg::Point>& points, const std::vector<vg::Vec3>& cameraPath,
                         int panelSize);
+
+// Range of a depth map's inverse depth for coloring: its 2nd and 98th
+// percentiles. False when it has no depth.
+bool inverseDepthRange(const vg::DepthMap& dm, float& lo, float& hi);
+
+// A depth map as colors: inverse depth from far (blue) to near (red) over
+// [lo, hi] (inverse depth; both 0 = inverseDepthRange()), no depth black.
+RgbImage colorizeDepth(const vg::DepthMap& dm, float lo = 0, float hi = 0);
+// Normals as colors (x, y, z mapped to r, g, b), no depth black.
+RgbImage colorizeNormals(const vg::DepthMap& dm);
+// Matching cost (1 - NCC) from 0 (white) to `maxCost` and over (black).
+RgbImage colorizeCost(const vg::DepthMap& dm, float maxCost);
 
 // Writes an RGB8 frame. Format is chosen by extension: .bmp, otherwise binary .ppm.
 bool writeImage(const vg::FrameView& frame, const std::string& path);

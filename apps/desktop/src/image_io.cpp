@@ -361,3 +361,66 @@ RgbImage renderMapViews(const std::vector<vg::Point>& points, const std::vector<
     }
     return out;
 }
+
+bool inverseDepthRange(const vg::DepthMap& dm, float& lo, float& hi) {
+    std::vector<float> inv;
+    for (std::size_t i = 0; i < dm.depth.size(); i += 7)
+        if (dm.depth[i] > 0) inv.push_back(1 / dm.depth[i]);
+    if (inv.empty()) return false;
+    std::sort(inv.begin(), inv.end());
+    lo = inv[inv.size() * 2 / 100];
+    hi = std::max(inv[inv.size() * 98 / 100], lo * 1.0001f + 1e-9f);
+    return true;
+}
+
+RgbImage colorizeDepth(const vg::DepthMap& dm, float lo, float hi) {
+    if (lo == 0 && hi == 0 && !inverseDepthRange(dm, lo, hi)) hi = 1;
+    // Turbo-like ramp.
+    static const float stops[][4] = {{0.00f, 48, 18, 59},   {0.15f, 68, 129, 240}, {0.35f, 26, 229, 182},
+                                      {0.50f, 164, 252, 60}, {0.65f, 251, 185, 56}, {0.85f, 226, 68, 10},
+                                      {1.00f, 122, 4, 3}};
+    RgbImage out;
+    out.width = dm.width;
+    out.height = dm.height;
+    out.pixels.assign(static_cast<std::size_t>(dm.width) * dm.height * 3, 0);
+    for (std::size_t i = 0; i < dm.depth.size(); ++i) {
+        if (dm.depth[i] <= 0) continue;
+        const float t = std::clamp((1 / dm.depth[i] - lo) / (hi - lo), 0.0f, 1.0f);
+        int k = 1;
+        while (k < 6 && stops[k][0] < t) ++k;
+        const float a = (t - stops[k - 1][0]) / (stops[k][0] - stops[k - 1][0]);
+        for (int c = 0; c < 3; ++c)
+            out.pixels[i * 3 + c] =
+                static_cast<std::uint8_t>(stops[k - 1][c + 1] + a * (stops[k][c + 1] - stops[k - 1][c + 1]));
+    }
+    return out;
+}
+
+RgbImage colorizeNormals(const vg::DepthMap& dm) {
+    RgbImage out;
+    out.width = dm.width;
+    out.height = dm.height;
+    out.pixels.assign(static_cast<std::size_t>(dm.width) * dm.height * 3, 0);
+    for (std::size_t i = 0; i < dm.depth.size() && i < dm.normal.size(); ++i) {
+        if (dm.depth[i] <= 0) continue;
+        // Camera frame (x right, y down, z forward); a normal faces the camera, so z < 0.
+        const vg::Vec3& n = dm.normal[i];
+        out.pixels[i * 3 + 0] = static_cast<std::uint8_t>(std::clamp((n.x * 0.5 + 0.5) * 255, 0.0, 255.0));
+        out.pixels[i * 3 + 1] = static_cast<std::uint8_t>(std::clamp((-n.y * 0.5 + 0.5) * 255, 0.0, 255.0));
+        out.pixels[i * 3 + 2] = static_cast<std::uint8_t>(std::clamp((-n.z * 0.5 + 0.5) * 255, 0.0, 255.0));
+    }
+    return out;
+}
+
+RgbImage colorizeCost(const vg::DepthMap& dm, float maxCost) {
+    RgbImage out;
+    out.width = dm.width;
+    out.height = dm.height;
+    out.pixels.assign(static_cast<std::size_t>(dm.width) * dm.height * 3, 0);
+    for (std::size_t i = 0; i < dm.cost.size(); ++i) {
+        const float t = std::clamp(1 - dm.cost[i] / maxCost, 0.0f, 1.0f);
+        const auto v = static_cast<std::uint8_t>(t * 255);
+        out.pixels[i * 3 + 0] = out.pixels[i * 3 + 1] = out.pixels[i * 3 + 2] = v;
+    }
+    return out;
+}

@@ -33,6 +33,14 @@ double typicalDistance(const std::vector<vg::Point>& points, const vg::Vec3& fro
     return std::max(d[d.size() / 2], 1e-6);
 }
 
+// A depth map as a thumbnail with the long side `size`.
+RgbImage depthThumbnail(const vg::DepthMap& dm, int size) {
+    const RgbImage full = colorizeDepth(dm);
+    const double shrink = std::min(1.0, double(size) / std::max(dm.width, dm.height));
+    return resizeRgb(full.view(), std::max(1, static_cast<int>(std::lround(dm.width * shrink))),
+                     std::max(1, static_cast<int>(std::lround(dm.height * shrink))));
+}
+
 }  // namespace
 
 LiveSession::LiveSession(std::string path, Settings settings, std::wstring cameraId)
@@ -280,10 +288,15 @@ void LiveSession::runDense(double processingFps, const std::string& summary) {
     if (stop_) return;
 
     Clock::time_point lastStatus;
+    std::shared_ptr<const vg::DepthMap> shown;  // in the thumbnail
     const auto update = [&]() {
         const vg::DenseReconstructor::Progress p = dense->progress();
         if (!p.finished && Clock::now() - lastStatus < std::chrono::milliseconds(200)) return;
         lastStatus = Clock::now();
+        if (std::shared_ptr<const vg::DepthMap> dm = dense->lastDepthMap(); dm && dm != shown) {
+            shown = dm;
+            thumbnail_ = depthThumbnail(*dm, settings_.thumbnailSize);
+        }
         if (p.finished) {
             std::snprintf(buf, sizeof(buf), "dense: done, %.2f M points from %d keyframes (kept %d of %d)   %dx%d   %s",
                           p.points / 1e6, p.references, p.selected, p.totalKeyframes, p.width, p.height,
